@@ -19,7 +19,6 @@ from pathlib import Path
 import klayout.db as kdb
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 
 REPO = Path(__file__).resolve().parent.parent / "ws-run1"
 OAS = REPO / "layout" / "reticle.oas"
@@ -126,12 +125,12 @@ def assign_net_names(pads: list[Pad], labels: list[tuple[str, float, float]]) ->
         pad.net = sorted(hits.keys(), key=score)[0]
 
 
-def _classify_edge(pad: Pad, die_w: float, die_h: float) -> str:
-    """Return which edge the pad is closest to: 'L','R','T','B'."""
-    d_left = pad.cx
-    d_right = die_w - pad.cx
-    d_bottom = pad.cy
-    d_top = die_h - pad.cy
+def _classify_edge(pad: Pad, x0: float, y0: float, x1: float, y1: float) -> str:
+    """Return which die edge this pad is closest to: 'L','R','T','B'."""
+    d_left = pad.cx - x0
+    d_right = x1 - pad.cx
+    d_bottom = pad.cy - y0
+    d_top = y1 - pad.cy
     m = min(d_left, d_right, d_bottom, d_top)
     if m == d_left:
         return "L"
@@ -142,6 +141,24 @@ def _classify_edge(pad: Pad, die_w: float, die_h: float) -> str:
     return "T"
 
 
+def _is_peripheral(pad: Pad, x0: float, y0: float, x1: float, y1: float) -> bool:
+    """A pad is peripheral if it sits against a die edge (not deep inside).
+
+    The threshold is a small multiple of the pad's own dimensions: real
+    peripheral pads are placed with only a micrometres-wide gap to the die
+    edge, so their centre lies within ~1 pad-width of that edge. Probe
+    pads placed inside the die (like MOS2's internal rows) are many times
+    their own size away from any edge and fall into the interior bucket.
+    """
+    d = min(
+        pad.cx - x0,
+        x1 - pad.cx,
+        pad.cy - y0,
+        y1 - pad.cy,
+    )
+    return d <= max(pad.w, pad.h) * 2.0
+
+
 def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, float],
            out_png: Path, out_svg: Path) -> None:
     """Render pad diagram with leader lines + net labels around the die."""
@@ -150,8 +167,9 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     die_h = y1 - y0
 
     # Outside margin where labels sit — scaled to die size.
+    # label_gap pushes text clearly off the die edge.
     margin = max(die_w, die_h) * 0.30
-    label_gap = max(die_w, die_h) * 0.02
+    label_gap = max(die_w, die_h) * 0.03
 
     # Figure: fit the die into a 14" bounding box preserving aspect ratio.
     # Fixed size keeps font pixel-height consistent across all designs.
@@ -188,55 +206,48 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
         else:
             unlabelled += 1
 
-    # Group pads per edge, then stack labels along that edge
-    edges: dict[str, list[Pad]] = {"L": [], "R": [], "T": [], "B": []}
+    # Place each label directly in line with its pad (no leader lines).
+    #
+    # Peripheral pads (touching a die edge):
+    #   L/R edge labels stay horizontal, sharing the pad's y-coordinate.
+    #   T/B edge labels are rotated 90°, sharing the pad's x-coordinate.
+    #   `rotation_mode="anchor"` makes ha/va apply to the rotated text's
+    #   bounding box so "left + rot=90" grows upward from the anchor
+    #   and "right + rot=90" grows downward.
+    #
+    # Interior pads (deep inside the die, e.g. probe pads on the floorplan):
+    #   no meaningful "outside" exists, so the label sits immediately to the
+    #   right of the pad box — the only location guaranteed to track the pad.
+    interior_gap = max(die_w, die_h) * 0.002
     for pad in pads:
-        edges[_classify_edge(pad, die_w, die_h)].append(pad)
+        txt = pad.net if pad.net else "?"
+        color = "#111" if pad.net else "#b00"
 
-    # Sort pads along their edge (so label stacks don't cross)
-    edges["L"].sort(key=lambda p: p.cy)
-    edges["R"].sort(key=lambda p: p.cy)
-    edges["T"].sort(key=lambda p: p.cx)
-    edges["B"].sort(key=lambda p: p.cx)
-
-    for edge, pads_on_edge in edges.items():
-        n = len(pads_on_edge)
-        if n == 0:
-            continue
-        for i, pad in enumerate(pads_on_edge):
-            # Labels on L/R edges stay horizontal, labels on T/B are rotated
-            # 90° so dense pad stacks don't collide.
+        if _is_peripheral(pad, x0, y0, x1, y1):
+            edge = _classify_edge(pad, x0, y0, x1, y1)
             if edge == "L":
-                tx = x0 - label_gap
-                ty = y0 + (i + 0.5) * die_h / n
+                tx, ty = x0 - label_gap, pad.cy
                 ha, va, rot = "right", "center", 0
             elif edge == "R":
-                tx = x1 + label_gap
-                ty = y0 + (i + 0.5) * die_h / n
+                tx, ty = x1 + label_gap, pad.cy
                 ha, va, rot = "left", "center", 0
-            elif edge == "B":
-                tx = x0 + (i + 0.5) * die_w / n
-                ty = y0 - label_gap
-                ha, va, rot = "right", "center", 90
-            else:  # T
-                tx = x0 + (i + 0.5) * die_w / n
-                ty = y1 + label_gap
+            elif edge == "T":
+                tx, ty = pad.cx, y1 + label_gap
                 ha, va, rot = "left", "center", 90
+            else:  # B
+                tx, ty = pad.cx, y0 - label_gap
+                ha, va, rot = "right", "center", 90
+        else:
+            # Interior pad — label sits flush to the pad's right side.
+            tx, ty = pad.x1 + interior_gap, pad.cy
+            ha, va, rot = "left", "center", 0
 
-            txt = pad.net if pad.net else "?"
-            color = "#111" if pad.net else "#b00"
-
-            # Leader line from pad centre to label
-            ax.add_line(Line2D(
-                [pad.cx, tx], [pad.cy, ty],
-                color="#888", linewidth=0.35, zorder=1.5,
-            ))
-
-            ax.text(
-                tx, ty, txt,
-                ha=ha, va=va, fontsize=7, color=color,
-                family="monospace", zorder=3, rotation=rot,
-            )
+        ax.text(
+            tx, ty, txt,
+            ha=ha, va=va, fontsize=6, color=color,
+            family="monospace", zorder=3, rotation=rot,
+            rotation_mode="anchor",
+        )
 
     ax.set_xlim(x0 - margin, x1 + margin)
     ax.set_ylim(y0 - margin, y1 + margin)

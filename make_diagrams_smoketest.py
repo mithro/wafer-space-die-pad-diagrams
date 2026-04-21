@@ -8,7 +8,13 @@ import klayout.db as kdb
 from make_diagrams import (OAS, OUT_DIR, assign_net_names, extract_labels,
                            extract_pads, render)
 
-SMOKE_TARGETS = ["TQVA_chip_top_14_8", "KIAN_chip_top_8_0"]
+SMOKE_TARGETS = [
+    "TQVA_chip_top_14_8",
+    "KIAN_chip_top_8_0",
+    "ISHI_ISHI-KAI_WS_RUN1_12_4",
+    "MOS2_chip_top_10_6",
+    "TRID_TOP_14_2",
+]
 
 
 def main() -> None:
