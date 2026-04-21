@@ -35,6 +35,19 @@ GDS_RENDER_MAX_PX = 1200
 PAD_LAYER = (37, 0)
 LABEL_LAYERS = [(81, 10), (53, 10)]  # Metal5_Label, MetalTop_Label
 
+# Visible layers for the GDS background render. The raw gf180mcu.lyp marks
+# ~15 layers visible with clashing colors (pink wells, teal dummy metal,
+# green poly, yellow-green ESD, salmon n-well, ...), which produces a busy
+# multi-coloured render. For a publication-style background we want a
+# two-tone look matching the ws-run1 README renders: yellow/olive body
+# from top-level metal, dark red pads from the Pad layer. Everything else
+# is hidden so the pad ring stands out cleanly.
+BG_VISIBLE_LAYERS: set[tuple[int, int]] = {
+    (37, 0),   # Pad           → #72342b (dark red)
+    (81, 0),   # Metal5        → #cdc16b (olive/yellow)
+    (53, 0),   # MetalTop      → #b1dd9c (pale green/yellow)
+}
+
 # Minimum pad edge length in microns to count as an IO pad (not a seal ring).
 PAD_MIN_UM = 30.0
 
@@ -353,22 +366,35 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
 
 
 def setup_layout_view(layout: kdb.Layout) -> klay.LayoutView:
-    """Build a LayoutView bound to the given layout + the ws-run1 style.
+    """Build a LayoutView that renders like the ws-run1 README images.
 
-    The only rendering style in the ws-run1 repo is lyp/gf180mcu.lyp (a
-    layer-properties file covering layer colors, dither patterns, frame
-    styles and per-layer visibility). Everything visual in the rendered
-    background image — fill/frame colors, dither hatches, whether a
-    layer is drawn at all — comes from this file.
+    Colors and dither patterns come from ws-run1/lyp/gf180mcu.lyp, but the
+    raw .lyp enables ~15 layers (wells, poly, dummies, substrate) in
+    clashing colors. We keep only the layers in BG_VISIBLE_LAYERS visible
+    so the render stays two-tone (yellow metal + dark red pads) and the
+    pad ring reads clearly. The other visual toggles:
 
-    `grid-visible` is turned off because KLayout's coordinate grid is a
-    GUI overlay, not a design property; it is not defined by the .lyp
-    and would otherwise overlay every chip with a dotted grid.
+    - `grid-visible=false`: suppress KLayout's GUI coordinate grid.
+    - `background-color=#ffffff`: white canvas outside the die so the
+      overlay labels in make_diagrams.render sit on white paper.
+    - `text-visible=false`: don't draw text objects from the layout — our
+      matplotlib labels do the annotation; leaving KLayout's in adds
+      unreadable microscopic strings inside every pad.
+    - `draw-cell-frame=false`: suppress the default black rectangle drawn
+      around each instance, which otherwise frames every pad cell and
+      every logo sub-cell in a heavy black border.
     """
     lv = klay.LayoutView()
     lv.show_layout(layout, True)
     lv.load_layer_props(str(LYP))
     lv.set_config("grid-visible", "false")
+    lv.set_config("background-color", "#ffffff")
+    lv.set_config("text-visible", "false")
+    lv.set_config("draw-cell-frame", "false")
+    # Mask down to the two-tone layer set.
+    for it in lv.each_layer():
+        it.visible = (it.source_layer, it.source_datatype) in BG_VISIBLE_LAYERS
+    lv.update_content()
     return lv
 
 

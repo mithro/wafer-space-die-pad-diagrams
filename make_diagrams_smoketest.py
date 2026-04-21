@@ -10,6 +10,7 @@ from make_diagrams import (OAS, OUT_DIR, _is_peripheral, assign_net_names,
                            render_gds_background, setup_layout_view)
 
 SMOKE_TARGETS = [
+    "WSLG_chip_top_10_2",          # matches the README reference image
     "TQVA_chip_top_14_8",
     "KIAN_chip_top_8_0",
     "ISHI_ISHI-KAI_WS_RUN1_12_4",
