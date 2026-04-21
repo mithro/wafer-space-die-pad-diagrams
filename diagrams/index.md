@@ -15,12 +15,12 @@
 | GD04_chip_top_10_8 | 72 | 72 | [GD04_chip_top_10_8.png](GD04_chip_top_10_8.png) |
 | GD04_chip_top_6_8 | 72 | 72 | [GD04_chip_top_6_8.png](GD04_chip_top_6_8.png) |
 | HZ80_chip_top_14_0 | 72 | 72 | [HZ80_chip_top_14_0.png](HZ80_chip_top_14_0.png) |
-| ISHI_ISHI-KAI_WS_RUN1_12_4 | 258 | 155 | [ISHI_ISHI-KAI_WS_RUN1_12_4.png](ISHI_ISHI-KAI_WS_RUN1_12_4.png) |
+| ISHI_ISHI-KAI_WS_RUN1_12_4 | 74 | 74 | [ISHI_ISHI-KAI_WS_RUN1_12_4.png](ISHI_ISHI-KAI_WS_RUN1_12_4.png) |
 | JKU1_chip_top_10_0 | 74 | 74 | [JKU1_chip_top_10_0.png](JKU1_chip_top_10_0.png) |
 | JKU2_chip_top_0_8 | 72 | 72 | [JKU2_chip_top_0_8.png](JKU2_chip_top_0_8.png) |
 | KIAN_chip_top_8_0 | 74 | 74 | [KIAN_chip_top_8_0.png](KIAN_chip_top_8_0.png) |
 | MOLE_chip_top_8_4 | 74 | 74 | [MOLE_chip_top_8_4.png](MOLE_chip_top_8_4.png) |
-| MOS2_chip_top_10_6 | 162 | 162 | [MOS2_chip_top_10_6.png](MOS2_chip_top_10_6.png) |
+| MOS2_chip_top_10_6 | 74 | 74 | [MOS2_chip_top_10_6.png](MOS2_chip_top_10_6.png) |
 | MOSB_chip_top_4_0 | 74 | 74 | [MOSB_chip_top_4_0.png](MOSB_chip_top_4_0.png) |
 | MOSB_chip_top_4_2 | 74 | 74 | [MOSB_chip_top_4_2.png](MOSB_chip_top_4_2.png) |
 | OCD1_caravel_openframe_top_8_6 | 63 | 63 | [OCD1_caravel_openframe_top_8_6.png](OCD1_caravel_openframe_top_8_6.png) |
