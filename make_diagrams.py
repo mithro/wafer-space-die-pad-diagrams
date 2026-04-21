@@ -17,12 +17,19 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import klayout.db as kdb
+import klayout.lay as klay
+import matplotlib.image as mpimg
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 
 REPO = Path(__file__).resolve().parent.parent / "ws-run1"
 OAS = REPO / "layout" / "reticle.oas"
+LYP = REPO / "lyp" / "gf180mcu.lyp"
 OUT_DIR = Path(__file__).resolve().parent / "diagrams"
+# Dimensions for the GDS render used as a background. 1200 px on the long
+# edge gives enough resolution to see structure at final figure size while
+# keeping the render fast.
+GDS_RENDER_MAX_PX = 1200
 
 # GF180MCU layer numbers
 PAD_LAYER = (37, 0)
@@ -196,9 +203,44 @@ def _is_peripheral(pad: Pad, x0: float, y0: float, x1: float, y1: float) -> bool
     return d <= max(pad.w, pad.h) * 2.0
 
 
+def render_gds_background(lv: klay.LayoutView, cell_name: str, layout: kdb.Layout,
+                          die_bb: tuple[float, float, float, float],
+                          out_path: Path) -> None:
+    """Render the design cell via KLayout's LayoutView to a PNG file.
+
+    The image covers the die_bb exactly (no axes, grid, or rulers) so it
+    can be placed under the pad overlay with `imshow(extent=die_bb)`.
+    """
+    x0, y0, x1, y1 = die_bb
+    die_w = x1 - x0
+    die_h = y1 - y0
+
+    lv.active_cellview().cell_name = cell_name
+
+    # Hide chrome so the raster is a clean render of the shapes only.
+    lv.set_config("grid-visible", "false")
+    lv.set_config("text-visible", "false")
+    lv.set_config("background-color", "#ffffff")
+
+    lv.zoom_box(kdb.DBox(x0, y0, x1, y1))
+    lv.max_hier()
+
+    # Pixel size proportional to die aspect ratio so the image maps 1:1 to
+    # scene coordinates once we pass `extent=die_bb` to imshow.
+    if die_w >= die_h:
+        w_px = GDS_RENDER_MAX_PX
+        h_px = max(int(GDS_RENDER_MAX_PX * die_h / die_w), 32)
+    else:
+        h_px = GDS_RENDER_MAX_PX
+        w_px = max(int(GDS_RENDER_MAX_PX * die_w / die_h), 32)
+    lv.save_image(str(out_path), w_px, h_px)
+
+
 def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, float],
-           out_png: Path, out_svg: Path) -> None:
-    """Render pad diagram with leader lines + net labels around the die."""
+           out_png: Path, out_svg: Path,
+           background_image: Path | None = None) -> None:
+    """Render pad diagram. If background_image is given, use it as the
+    die-area background (typically a KLayout GDS render of the cell)."""
     x0, y0, x1, y1 = die_bb
     die_w = x1 - x0
     die_h = y1 - y0
@@ -223,10 +265,21 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
         fig_w = canvas * total_w / total_h
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
-    # Die outline
+    # GDS render as background, or plain fill if none supplied.
+    if background_image is not None and background_image.exists():
+        img = mpimg.imread(str(background_image))
+        ax.imshow(img, extent=(x0, x1, y0, y1), origin="upper",
+                  zorder=0, interpolation="bilinear", aspect="auto")
+    else:
+        ax.add_patch(mpatches.Rectangle(
+            (x0, y0), die_w, die_h,
+            linewidth=0, edgecolor="none", facecolor="#fafafa", zorder=0,
+        ))
+
+    # Thin die outline on top of the render so the chip edge is obvious.
     ax.add_patch(mpatches.Rectangle(
         (x0, y0), die_w, die_h,
-        linewidth=1.2, edgecolor="#333", facecolor="#fafafa", zorder=1,
+        linewidth=1.0, edgecolor="#222", facecolor="none", zorder=1.5,
     ))
 
     # Draw pads, colored by net class (signal / ground / power variants).
@@ -295,19 +348,31 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     ax.grid(True, which="both", linewidth=0.3, alpha=0.4)
 
     fig.tight_layout()
-    fig.savefig(out_png, dpi=300)
+    fig.savefig(out_png, dpi=180)
     fig.savefig(out_svg)
     plt.close(fig)
 
 
+def setup_layout_view(layout: kdb.Layout) -> klay.LayoutView:
+    """Build a LayoutView bound to the given layout + the GF180 .lyp file."""
+    lv = klay.LayoutView()
+    lv.show_layout(layout, True)
+    lv.load_layer_props(str(LYP))
+    return lv
+
+
 def main() -> None:
     OUT_DIR.mkdir(exist_ok=True)
+    bg_cache = OUT_DIR.parent / "tmp" / "gds_renders"
+    bg_cache.mkdir(parents=True, exist_ok=True)
 
     layout = kdb.Layout()
     print(f"Reading {OAS} ...")
     t0 = time.time()
     layout.read(str(OAS))
     print(f"  loaded in {time.time() - t0:.1f}s — {layout.cells()} cells")
+
+    lv = setup_layout_view(layout)
 
     top = next(iter(layout.top_cells()))
     # Skip filler/text utility cells when generating design diagrams.
@@ -348,7 +413,9 @@ def main() -> None:
 
         out_png = OUT_DIR / f"{name}.png"
         out_svg = OUT_DIR / f"{name}.svg"
-        render(name, pads, die_bb, out_png, out_svg)
+        bg_png = bg_cache / f"{name}.png"
+        render_gds_background(lv, name, layout, die_bb, bg_png)
+        render(name, pads, die_bb, out_png, out_svg, background_image=bg_png)
 
         labelled = sum(1 for p in pads if p.net)
         summary.append((name, len(pads), labelled))
