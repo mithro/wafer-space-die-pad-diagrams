@@ -1,0 +1,9 @@
+[project]
+name = "reticle-diagrams"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "gdstk>=1.0.0",
+    "klayout>=0.30.8",
+    "matplotlib>=3.10.8",
+]
