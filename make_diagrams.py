@@ -208,20 +208,19 @@ def render_gds_background(lv: klay.LayoutView, cell_name: str, layout: kdb.Layou
                           out_path: Path) -> None:
     """Render the design cell via KLayout's LayoutView to a PNG file.
 
-    The image covers the die_bb exactly (no axes, grid, or rulers) so it
-    can be placed under the pad overlay with `imshow(extent=die_bb)`.
+    Styling comes from the .lyp loaded in setup_layout_view — layer colors,
+    dither patterns, frame styles and per-layer visibility are all driven
+    by ws-run1/lyp/gf180mcu.lyp. This function only picks the cell and
+    the viewport.
+
+    The image covers die_bb exactly so it can be placed under the pad
+    overlay with `imshow(extent=die_bb)`.
     """
     x0, y0, x1, y1 = die_bb
     die_w = x1 - x0
     die_h = y1 - y0
 
     lv.active_cellview().cell_name = cell_name
-
-    # Hide chrome so the raster is a clean render of the shapes only.
-    lv.set_config("grid-visible", "false")
-    lv.set_config("text-visible", "false")
-    lv.set_config("background-color", "#ffffff")
-
     lv.zoom_box(kdb.DBox(x0, y0, x1, y1))
     lv.max_hier()
 
@@ -354,10 +353,22 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
 
 
 def setup_layout_view(layout: kdb.Layout) -> klay.LayoutView:
-    """Build a LayoutView bound to the given layout + the GF180 .lyp file."""
+    """Build a LayoutView bound to the given layout + the ws-run1 style.
+
+    The only rendering style in the ws-run1 repo is lyp/gf180mcu.lyp (a
+    layer-properties file covering layer colors, dither patterns, frame
+    styles and per-layer visibility). Everything visual in the rendered
+    background image — fill/frame colors, dither hatches, whether a
+    layer is drawn at all — comes from this file.
+
+    `grid-visible` is turned off because KLayout's coordinate grid is a
+    GUI overlay, not a design property; it is not defined by the .lyp
+    and would otherwise overlay every chip with a dotted grid.
+    """
     lv = klay.LayoutView()
     lv.show_layout(layout, True)
     lv.load_layer_props(str(LYP))
+    lv.set_config("grid-visible", "false")
     return lv
 
 
