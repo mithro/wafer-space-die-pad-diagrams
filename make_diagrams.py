@@ -1,0 +1,321 @@
+"""Generate annotated pad diagrams for each design in the ws-run1 reticle.
+
+For every top-level instance in reticle.oas, emit a PNG and SVG showing:
+  - The die outline (the design cell's bounding box)
+  - Each IO pad drawn as a filled rectangle (Pad layer 37/0, filtered by size)
+  - The net name for each pad, pulled from Metal5_Label (81/10) or
+    MetalTop_Label (53/10) texts whose position falls inside the pad
+
+The layout is read once; all designs are rendered from that single load.
+"""
+
+from __future__ import annotations
+
+import time
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
+
+import klayout.db as kdb
+import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+
+REPO = Path(__file__).resolve().parent.parent / "ws-run1"
+OAS = REPO / "layout" / "reticle.oas"
+OUT_DIR = Path(__file__).resolve().parent / "diagrams"
+
+# GF180MCU layer numbers
+PAD_LAYER = (37, 0)
+LABEL_LAYERS = [(81, 10), (53, 10)]  # Metal5_Label, MetalTop_Label
+
+# Minimum pad edge length in microns to count as an IO pad (not a seal ring).
+PAD_MIN_UM = 30.0
+
+
+@dataclass
+class Pad:
+    """A single IO pad with its rectangle and assigned net name."""
+    x0: float   # um
+    y0: float
+    x1: float
+    y1: float
+    net: str | None = None
+
+    @property
+    def cx(self) -> float:
+        return 0.5 * (self.x0 + self.x1)
+
+    @property
+    def cy(self) -> float:
+        return 0.5 * (self.y0 + self.y1)
+
+    @property
+    def w(self) -> float:
+        return self.x1 - self.x0
+
+    @property
+    def h(self) -> float:
+        return self.y1 - self.y0
+
+
+def extract_pads(cell: kdb.Cell, layout: kdb.Layout) -> list[Pad]:
+    """Return IO-sized pad rectangles in this cell (hierarchical)."""
+    layer_index = layout.layer(*PAD_LAYER)
+    pads: list[Pad] = []
+    it = cell.begin_shapes_rec(layer_index)
+    while not it.at_end():
+        shape = it.shape()
+        tr = it.trans()
+        bb = shape.bbox().transformed(tr)
+        w_um = bb.width() * layout.dbu
+        h_um = bb.height() * layout.dbu
+        if w_um >= PAD_MIN_UM and h_um >= PAD_MIN_UM:
+            pads.append(Pad(
+                x0=bb.left * layout.dbu,
+                y0=bb.bottom * layout.dbu,
+                x1=bb.right * layout.dbu,
+                y1=bb.top * layout.dbu,
+            ))
+        it.next()
+    return pads
+
+
+def extract_labels(cell: kdb.Cell, layout: kdb.Layout) -> list[tuple[str, float, float]]:
+    """Return (net_name, x_um, y_um) for every text on label layers."""
+    out: list[tuple[str, float, float]] = []
+    for ln, dt in LABEL_LAYERS:
+        li = layout.layer(ln, dt)
+        it = cell.begin_shapes_rec(li)
+        while not it.at_end():
+            shape = it.shape()
+            tr = it.trans()
+            if shape.is_text():
+                t = tr * shape.text
+                out.append((t.string, t.x * layout.dbu, t.y * layout.dbu))
+            it.next()
+    return out
+
+
+def assign_net_names(pads: list[Pad], labels: list[tuple[str, float, float]]) -> None:
+    """For each pad, pick the best net-name label whose (x,y) lies inside it.
+
+    GF180MCU GPIO cells put a generic "PAD" (or similar) label inside every
+    bondable metal region. The user's top-level net name sits on the same
+    pad but is more descriptive (e.g. "bidir_PAD[29]", "clk_PAD", "VDD").
+    We score labels so generic tokens lose to descriptive ones.
+    """
+    generic = {"PAD", "pad", "Pad", "BOND", "bond"}
+
+    def score(name: str) -> tuple[int, int, int, int]:
+        is_generic = 1 if name in generic else 0
+        # Port-indexed names (contain '[') are very specific: boost them.
+        is_indexed = 0 if "[" in name else 1
+        # Supply nets are short UPPER names — keep those recognised too.
+        is_supply = 0 if name.isupper() and len(name) <= 6 else 1
+        # Prefer descriptive (longer) names among otherwise equal candidates.
+        return (is_generic, is_indexed, is_supply, -len(name))
+
+    for pad in pads:
+        hits: Counter[str] = Counter()
+        for name, x, y in labels:
+            if pad.x0 <= x <= pad.x1 and pad.y0 <= y <= pad.y1:
+                hits[name] += 1
+        if not hits:
+            continue
+        pad.net = sorted(hits.keys(), key=score)[0]
+
+
+def _classify_edge(pad: Pad, die_w: float, die_h: float) -> str:
+    """Return which edge the pad is closest to: 'L','R','T','B'."""
+    d_left = pad.cx
+    d_right = die_w - pad.cx
+    d_bottom = pad.cy
+    d_top = die_h - pad.cy
+    m = min(d_left, d_right, d_bottom, d_top)
+    if m == d_left:
+        return "L"
+    if m == d_right:
+        return "R"
+    if m == d_bottom:
+        return "B"
+    return "T"
+
+
+def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, float],
+           out_png: Path, out_svg: Path) -> None:
+    """Render pad diagram with leader lines + net labels around the die."""
+    x0, y0, x1, y1 = die_bb
+    die_w = x1 - x0
+    die_h = y1 - y0
+
+    # Outside margin where labels sit — scaled to die size.
+    margin = max(die_w, die_h) * 0.30
+    label_gap = max(die_w, die_h) * 0.02
+
+    # Figure: fit the die into a 14" bounding box preserving aspect ratio.
+    # Fixed size keeps font pixel-height consistent across all designs.
+    canvas = 14.0
+    total_w = die_w + 2 * margin
+    total_h = die_h + 2 * margin
+    if total_w >= total_h:
+        fig_w = canvas
+        fig_h = canvas * total_h / total_w
+    else:
+        fig_h = canvas
+        fig_w = canvas * total_w / total_h
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+
+    # Die outline
+    ax.add_patch(mpatches.Rectangle(
+        (x0, y0), die_w, die_h,
+        linewidth=1.2, edgecolor="#333", facecolor="#fafafa", zorder=1,
+    ))
+
+    # Draw pads
+    labelled = unlabelled = 0
+    for pad in pads:
+        has_net = pad.net is not None
+        ax.add_patch(mpatches.Rectangle(
+            (pad.x0, pad.y0), pad.w, pad.h,
+            linewidth=0.4,
+            edgecolor="#222",
+            facecolor="#f5c16c" if has_net else "#bbbbbb",
+            zorder=2,
+        ))
+        if has_net:
+            labelled += 1
+        else:
+            unlabelled += 1
+
+    # Group pads per edge, then stack labels along that edge
+    edges: dict[str, list[Pad]] = {"L": [], "R": [], "T": [], "B": []}
+    for pad in pads:
+        edges[_classify_edge(pad, die_w, die_h)].append(pad)
+
+    # Sort pads along their edge (so label stacks don't cross)
+    edges["L"].sort(key=lambda p: p.cy)
+    edges["R"].sort(key=lambda p: p.cy)
+    edges["T"].sort(key=lambda p: p.cx)
+    edges["B"].sort(key=lambda p: p.cx)
+
+    for edge, pads_on_edge in edges.items():
+        n = len(pads_on_edge)
+        if n == 0:
+            continue
+        for i, pad in enumerate(pads_on_edge):
+            # Labels on L/R edges stay horizontal, labels on T/B are rotated
+            # 90° so dense pad stacks don't collide.
+            if edge == "L":
+                tx = x0 - label_gap
+                ty = y0 + (i + 0.5) * die_h / n
+                ha, va, rot = "right", "center", 0
+            elif edge == "R":
+                tx = x1 + label_gap
+                ty = y0 + (i + 0.5) * die_h / n
+                ha, va, rot = "left", "center", 0
+            elif edge == "B":
+                tx = x0 + (i + 0.5) * die_w / n
+                ty = y0 - label_gap
+                ha, va, rot = "right", "center", 90
+            else:  # T
+                tx = x0 + (i + 0.5) * die_w / n
+                ty = y1 + label_gap
+                ha, va, rot = "left", "center", 90
+
+            txt = pad.net if pad.net else "?"
+            color = "#111" if pad.net else "#b00"
+
+            # Leader line from pad centre to label
+            ax.add_line(Line2D(
+                [pad.cx, tx], [pad.cy, ty],
+                color="#888", linewidth=0.35, zorder=1.5,
+            ))
+
+            ax.text(
+                tx, ty, txt,
+                ha=ha, va=va, fontsize=7, color=color,
+                family="monospace", zorder=3, rotation=rot,
+            )
+
+    ax.set_xlim(x0 - margin, x1 + margin)
+    ax.set_ylim(y0 - margin, y1 + margin)
+    ax.set_aspect("equal")
+    ax.set_xlabel("x (um)")
+    ax.set_ylabel("y (um)")
+    ax.set_title(
+        f"{cell_name} — {die_w:.0f} x {die_h:.0f} um — "
+        f"{labelled} labelled pads, {unlabelled} unlabelled",
+        fontsize=11,
+    )
+    ax.grid(True, which="both", linewidth=0.3, alpha=0.4)
+
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=300)
+    fig.savefig(out_svg)
+    plt.close(fig)
+
+
+def main() -> None:
+    OUT_DIR.mkdir(exist_ok=True)
+
+    layout = kdb.Layout()
+    print(f"Reading {OAS} ...")
+    t0 = time.time()
+    layout.read(str(OAS))
+    print(f"  loaded in {time.time() - t0:.1f}s — {layout.cells()} cells")
+
+    top = next(iter(layout.top_cells()))
+    # Skip filler/text utility cells when generating design diagrams.
+    skip = {"RETICLE_FILL", "TEXT"}
+
+    instances: list[str] = []
+    for inst in top.each_inst():
+        name = inst.cell.name
+        if name in skip:
+            continue
+        if name not in instances:
+            instances.append(name)
+    print(f"\n{len(instances)} unique designs to render")
+
+    summary: list[tuple[str, int, int]] = []
+    for i, name in enumerate(sorted(instances), start=1):
+        t_start = time.time()
+        cell = layout.cell(name)
+        if cell is None:
+            print(f"  [{i}/{len(instances)}] {name}: cell not found, skipping")
+            continue
+        pads = extract_pads(cell, layout)
+        labels = extract_labels(cell, layout)
+        assign_net_names(pads, labels)
+
+        bb = cell.bbox()
+        die_bb = (
+            bb.left * layout.dbu,
+            bb.bottom * layout.dbu,
+            bb.right * layout.dbu,
+            bb.top * layout.dbu,
+        )
+
+        out_png = OUT_DIR / f"{name}.png"
+        out_svg = OUT_DIR / f"{name}.svg"
+        render(name, pads, die_bb, out_png, out_svg)
+
+        labelled = sum(1 for p in pads if p.net)
+        summary.append((name, len(pads), labelled))
+        print(f"  [{i:>2}/{len(instances)}] {name}: {len(pads):>3} pads, "
+              f"{labelled:>3} labelled  ({time.time() - t_start:.1f}s)")
+
+    # Write a summary index.
+    index = OUT_DIR / "index.md"
+    with index.open("w") as fh:
+        fh.write("# Reticle pad-diagram index\n\n")
+        fh.write("| Design cell | Pads | Labelled | Diagram |\n")
+        fh.write("|---|---|---|---|\n")
+        for name, n, nl in summary:
+            fh.write(f"| {name} | {n} | {nl} | [{name}.png]({name}.png) |\n")
+    print(f"\nWrote {index}")
+
+
+if __name__ == "__main__":
+    main()
