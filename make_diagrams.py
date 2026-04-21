@@ -31,6 +31,43 @@ LABEL_LAYERS = [(81, 10), (53, 10)]  # Metal5_Label, MetalTop_Label
 # Minimum pad edge length in microns to count as an IO pad (not a seal ring).
 PAD_MIN_UM = 30.0
 
+# Colors per pad class (fill, text). Follows standard electronics convention:
+# grounds are black/grey, supplies are reds/oranges, signals are amber.
+# Within each supply family, digital and analog use different shades so the
+# rails read apart at a glance.
+PAD_COLORS: dict[str, tuple[str, str]] = {
+    "gnd_digital": ("#212121", "#000000"),   # DVSS   — near-black
+    "gnd_analog":  ("#616161", "#37474f"),   # AVSS   — mid-grey
+    "gnd":         ("#424242", "#212121"),   # VSS/GND/VSUB — charcoal
+    "pwr_digital": ("#d32f2f", "#b71c1c"),   # DVDD   — crimson
+    "pwr_analog":  ("#f57c00", "#e65100"),   # AVDD   — orange
+    "pwr":         ("#e53935", "#b71c1c"),   # VDD/VCC — red
+    "signal":      ("#f5c16c", "#111111"),   # everything else
+}
+
+
+def classify_net(name: str | None) -> str:
+    """Return a key into PAD_COLORS for the given net name."""
+    if not name:
+        return "signal"
+    n = name.upper()
+    # Ground patterns first. "VSS" also appears inside "DVSS" / "AVSS",
+    # so the digital / analog variants must be tested before plain VSS.
+    if "DVSS" in n or "DGND" in n:
+        return "gnd_digital"
+    if "AVSS" in n or "AGND" in n:
+        return "gnd_analog"
+    if "VSS" in n or "GND" in n or n == "GROUND" or "VSUB" in n:
+        return "gnd"
+    # Power patterns — same ordering trick.
+    if "DVDD" in n or "VDDD" in n:
+        return "pwr_digital"
+    if "AVDD" in n or "VDDA" in n:
+        return "pwr_analog"
+    if "VDD" in n or "VCC" in n:
+        return "pwr"
+    return "signal"
+
 
 @dataclass
 class Pad:
@@ -166,10 +203,12 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     die_w = x1 - x0
     die_h = y1 - y0
 
-    # Outside margin where labels sit — scaled to die size.
-    # label_gap pushes text clearly off the die edge.
-    margin = max(die_w, die_h) * 0.30
-    label_gap = max(die_w, die_h) * 0.03
+    # Outside margin where labels sit, and the tiny gap between each pad's
+    # rectangle and its adjacent text. label_gap is small on purpose — pads
+    # already sit a few um inside the die edge, so this keeps the final
+    # pad-to-text gap tight while still avoiding the die outline.
+    margin = max(die_w, die_h) * 0.20
+    label_gap = max(die_w, die_h) * 0.003
 
     # Figure: fit the die into a 14" bounding box preserving aspect ratio.
     # Fixed size keeps font pixel-height consistent across all designs.
@@ -190,15 +229,17 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
         linewidth=1.2, edgecolor="#333", facecolor="#fafafa", zorder=1,
     ))
 
-    # Draw pads
+    # Draw pads, colored by net class (signal / ground / power variants).
     labelled = unlabelled = 0
     for pad in pads:
         has_net = pad.net is not None
+        cls = classify_net(pad.net) if has_net else "signal"
+        fill = PAD_COLORS[cls][0] if has_net else "#bbbbbb"
         ax.add_patch(mpatches.Rectangle(
             (pad.x0, pad.y0), pad.w, pad.h,
             linewidth=0.4,
             edgecolor="#222",
-            facecolor="#f5c16c" if has_net else "#bbbbbb",
+            facecolor=fill,
             zorder=2,
         ))
         if has_net:
@@ -228,12 +269,17 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
             ha, va, rot = "right", "center", 90
 
         txt = pad.net if pad.net else "?"
-        color = "#111" if pad.net else "#b00"
+        if pad.net:
+            color = PAD_COLORS[classify_net(pad.net)][1]
+            weight = "bold" if classify_net(pad.net) != "signal" else "normal"
+        else:
+            color = "#b00"
+            weight = "normal"
         ax.text(
             tx, ty, txt,
             ha=ha, va=va, fontsize=6, color=color,
             family="monospace", zorder=3, rotation=rot,
-            rotation_mode="anchor",
+            rotation_mode="anchor", fontweight=weight,
         )
 
     ax.set_xlim(x0 - margin, x1 + margin)
