@@ -207,41 +207,28 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
             unlabelled += 1
 
     # Place each label directly in line with its pad (no leader lines).
-    #
-    # Peripheral pads (touching a die edge):
-    #   L/R edge labels stay horizontal, sharing the pad's y-coordinate.
-    #   T/B edge labels are rotated 90°, sharing the pad's x-coordinate.
-    #   `rotation_mode="anchor"` makes ha/va apply to the rotated text's
-    #   bounding box so "left + rot=90" grows upward from the anchor
-    #   and "right + rot=90" grows downward.
-    #
-    # Interior pads (deep inside the die, e.g. probe pads on the floorplan):
-    #   no meaningful "outside" exists, so the label sits immediately to the
-    #   right of the pad box — the only location guaranteed to track the pad.
-    interior_gap = max(die_w, die_h) * 0.002
+    # L/R edge labels stay horizontal, sharing the pad's y-coordinate.
+    # T/B edge labels are rotated 90°, sharing the pad's x-coordinate.
+    # `rotation_mode="anchor"` makes ha/va apply to the rotated text's
+    # bounding box so "left + rot=90" grows upward from the anchor
+    # and "right + rot=90" grows downward.
     for pad in pads:
+        edge = _classify_edge(pad, x0, y0, x1, y1)
+        if edge == "L":
+            tx, ty = x0 - label_gap, pad.cy
+            ha, va, rot = "right", "center", 0
+        elif edge == "R":
+            tx, ty = x1 + label_gap, pad.cy
+            ha, va, rot = "left", "center", 0
+        elif edge == "T":
+            tx, ty = pad.cx, y1 + label_gap
+            ha, va, rot = "left", "center", 90
+        else:  # B
+            tx, ty = pad.cx, y0 - label_gap
+            ha, va, rot = "right", "center", 90
+
         txt = pad.net if pad.net else "?"
         color = "#111" if pad.net else "#b00"
-
-        if _is_peripheral(pad, x0, y0, x1, y1):
-            edge = _classify_edge(pad, x0, y0, x1, y1)
-            if edge == "L":
-                tx, ty = x0 - label_gap, pad.cy
-                ha, va, rot = "right", "center", 0
-            elif edge == "R":
-                tx, ty = x1 + label_gap, pad.cy
-                ha, va, rot = "left", "center", 0
-            elif edge == "T":
-                tx, ty = pad.cx, y1 + label_gap
-                ha, va, rot = "left", "center", 90
-            else:  # B
-                tx, ty = pad.cx, y0 - label_gap
-                ha, va, rot = "right", "center", 90
-        else:
-            # Interior pad — label sits flush to the pad's right side.
-            tx, ty = pad.x1 + interior_gap, pad.cy
-            ha, va, rot = "left", "center", 0
-
         ax.text(
             tx, ty, txt,
             ha=ha, va=va, fontsize=6, color=color,
@@ -307,6 +294,11 @@ def main() -> None:
             bb.right * layout.dbu,
             bb.top * layout.dbu,
         )
+
+        # Drop probe / internal pads — only the ring of peripheral pads
+        # is annotated. Interior pads end up in MOS2 / TRID / ISHI-style
+        # test structures and aren't part of the chip's pinout.
+        pads = [p for p in pads if _is_peripheral(p, *die_bb)]
 
         out_png = OUT_DIR / f"{name}.png"
         out_svg = OUT_DIR / f"{name}.svg"

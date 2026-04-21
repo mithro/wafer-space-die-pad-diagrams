@@ -5,8 +5,8 @@ from pathlib import Path
 
 import klayout.db as kdb
 
-from make_diagrams import (OAS, OUT_DIR, assign_net_names, extract_labels,
-                           extract_pads, render)
+from make_diagrams import (OAS, OUT_DIR, _is_peripheral, assign_net_names,
+                           extract_labels, extract_pads, render)
 
 SMOKE_TARGETS = [
     "TQVA_chip_top_14_8",
@@ -35,6 +35,7 @@ def main() -> None:
         bb = cell.bbox()
         die = (bb.left * layout.dbu, bb.bottom * layout.dbu,
                bb.right * layout.dbu, bb.top * layout.dbu)
+        pads = [p for p in pads if _is_peripheral(p, *die)]
         out_png = OUT_DIR / f"{name}.png"
         out_svg = OUT_DIR / f"{name}.svg"
         render(name, pads, die, out_png, out_svg)
