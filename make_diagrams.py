@@ -28,10 +28,21 @@ REPO = Path(__file__).resolve().parent.parent / "ws-run1"
 OAS = REPO / "layout" / "reticle.oas"
 LYP = REPO / "lyp" / "gf180mcu.lyp"
 OUT_DIR = Path(__file__).resolve().parent / "diagrams"
-# Dimensions for the GDS render used as a background. 1200 px on the long
-# edge gives enough resolution to see structure at final figure size while
-# keeping the render fast.
-GDS_RENDER_MAX_PX = 1200
+# Dimensions for the GDS render used as a background. The main plot
+# targets ~14" × 180 dpi = ~2520 px, so 3200 px on the long edge lets
+# it downsample slightly (crisper than a 1:1 or upsampled source).
+# Corner zoom insets crop a fixed physical region from this image; see
+# ZOOM_CROP_UM.
+GDS_RENDER_MAX_PX = 3200
+
+# Physical size of the corner zoom window, in um. The crop is always
+# this many microns on a side regardless of chip dimensions, so
+# smaller dies (e.g. the 0.5x0.5 TQVA at 1936x2531) show a larger
+# *fraction* of themselves in each inset than a full 1x1 chip — same
+# absolute detail, just scaled differently. A 500 um window easily
+# covers the 143-um ws-template cells plus the alignment marks and
+# some surrounding pad-ring structure.
+ZOOM_CROP_UM = 500.0
 
 # GF180MCU layer numbers
 PAD_LAYER = (37, 0)
@@ -676,11 +687,13 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     # Zoom insets for each die corner. Position each inset at the outer
     # corresponding corner of the figure in absolute inches so size is
     # consistent across chip aspects; the bottom-right inset is bumped
-    # up to sit above the info panel rather than overlap it.
+    # up to sit above the info panel rather than overlap it. Crop
+    # window is a fixed ZOOM_CROP_UM on a side, clamped so it never
+    # exceeds half the shortest die edge.
     if background_image is not None and background_image.exists():
         zoom_size_in = 1.6
         zoom_pad_in = 0.1
-        crop_um = max(die_w, die_h) * 0.09   # ~9% of die long edge
+        crop_um = min(ZOOM_CROP_UM, 0.5 * min(die_w, die_h))
         br_y = panel_h_in + 2 * gutter_in    # above info panel
         corner_positions = {
             "tl": (zoom_pad_in, fig_h - zoom_size_in - zoom_pad_in),
