@@ -22,6 +22,7 @@ import matplotlib.image as mpimg
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import segno
+from matplotlib.patches import ConnectionPatch
 
 REPO = Path(__file__).resolve().parent.parent / "ws-run1"
 OAS = REPO / "layout" / "reticle.oas"
@@ -324,6 +325,71 @@ def _project_code(cell_name: str) -> str:
     return cell_name.split("_", 1)[0]
 
 
+def _add_corner_zoom(fig: plt.Figure, ax: plt.Axes,
+                     background_image: Path,
+                     die_bb: tuple[float, float, float, float],
+                     corner: str,
+                     crop_um: float,
+                     inset_xy_in: tuple[float, float],
+                     inset_size_in: float) -> None:
+    """Draw a zoomed inset of `corner` of the GDS background render.
+
+    `corner` is one of 'tl', 'tr', 'bl', 'br'. The inset is an axes placed
+    at `inset_xy_in` (bottom-left, absolute inches from figure origin),
+    sized `inset_size_in` square. A red border goes around the inset, a
+    red rectangle marks the cropped region on the main axes, and a
+    ConnectionPatch links the two — crossing the axes boundary, which is
+    why we can't use `ax.indicate_inset_zoom` (that requires the inset
+    to be a child of the main axes).
+    """
+    x0, y0, x1, y1 = die_bb
+    if corner == "tl":
+        zb = (x0, y1 - crop_um, x0 + crop_um, y1)
+        connect_from = (x0, y1 - crop_um)  # bottom-left of zoom box
+        connect_to_axfrac = (1.0, 0.0)      # bottom-right of inset
+    elif corner == "tr":
+        zb = (x1 - crop_um, y1 - crop_um, x1, y1)
+        connect_from = (x1, y1 - crop_um)
+        connect_to_axfrac = (0.0, 0.0)      # bottom-left of inset
+    elif corner == "bl":
+        zb = (x0, y0, x0 + crop_um, y0 + crop_um)
+        connect_from = (x0, y0 + crop_um)
+        connect_to_axfrac = (1.0, 1.0)      # top-right of inset
+    else:  # br
+        zb = (x1 - crop_um, y0, x1, y0 + crop_um)
+        connect_from = (x1, y0 + crop_um)
+        connect_to_axfrac = (0.0, 1.0)      # top-left of inset
+
+    fig_w, fig_h = fig.get_size_inches()
+    axins = fig.add_axes((
+        inset_xy_in[0] / fig_w, inset_xy_in[1] / fig_h,
+        inset_size_in / fig_w, inset_size_in / fig_h,
+    ), zorder=6)
+    img = mpimg.imread(str(background_image))
+    axins.imshow(img, extent=(x0, x1, y0, y1), origin="upper",
+                 interpolation="bilinear", aspect="auto")
+    axins.set_xlim(zb[0], zb[2])
+    axins.set_ylim(zb[1], zb[3])
+    axins.set_xticks([])
+    axins.set_yticks([])
+    for spine in axins.spines.values():
+        spine.set_edgecolor("red")
+        spine.set_linewidth(2.2)
+
+    # Red rectangle on the main axes showing the crop region.
+    ax.add_patch(mpatches.Rectangle(
+        (zb[0], zb[1]), zb[2] - zb[0], zb[3] - zb[1],
+        linewidth=1.6, edgecolor="red", facecolor="none", zorder=5,
+    ))
+
+    # Connector line from the main-axes zoom box back to the inset corner.
+    fig.add_artist(ConnectionPatch(
+        xyA=connect_from, coordsA=ax.transData,
+        xyB=connect_to_axfrac, coordsB=axins.transAxes,
+        color="red", linewidth=1.2, alpha=0.75, zorder=5,
+    ))
+
+
 def _draw_qr_on_ax(ax: plt.Axes, data: str, fg: str = "#111",
                    bg: str | None = None) -> None:
     """Render a QR code encoding `data` into the given matplotlib axes.
@@ -606,6 +672,26 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     qr_x = text_x + (text_w_in + gap_in) / fig_w
     ax_qr = fig.add_axes((qr_x, text_y, qr_in / fig_w, qr_in / fig_h))
     _draw_qr_on_ax(ax_qr, cell_name, fg="#111", bg="#ffffff")
+
+    # Zoom insets for each die corner. Position each inset at the outer
+    # corresponding corner of the figure in absolute inches so size is
+    # consistent across chip aspects; the bottom-right inset is bumped
+    # up to sit above the info panel rather than overlap it.
+    if background_image is not None and background_image.exists():
+        zoom_size_in = 1.6
+        zoom_pad_in = 0.1
+        crop_um = max(die_w, die_h) * 0.09   # ~9% of die long edge
+        br_y = panel_h_in + 2 * gutter_in    # above info panel
+        corner_positions = {
+            "tl": (zoom_pad_in, fig_h - zoom_size_in - zoom_pad_in),
+            "tr": (fig_w - zoom_size_in - zoom_pad_in,
+                   fig_h - zoom_size_in - zoom_pad_in),
+            "bl": (zoom_pad_in, zoom_pad_in),
+            "br": (fig_w - zoom_size_in - zoom_pad_in, br_y),
+        }
+        for corner, xy in corner_positions.items():
+            _add_corner_zoom(fig, ax, background_image, die_bb,
+                             corner, crop_um, xy, zoom_size_in)
 
     fig.savefig(out_png, dpi=180)
     fig.savefig(out_svg)
