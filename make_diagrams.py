@@ -66,10 +66,19 @@ WSIP_LOGO_INSET_UM = (15.0, 11.0)  # from (die.x1, die.y1)
 WSIP_QR_COLOR = "#00838f"   # deep cyan — contrasts yellow metal + red pads
 WSIP_LOGO_COLOR = "#ad1457"  # magenta — same
 
-# Slot size per project code, lifted from ws-run1/README.md. Used in the
-# bottom-right info panel; "1x1" is the default for any code not listed.
-# Suffix "p5" in the README means ".5", which we normalise for display.
-PROJECT_SIZES: dict[str, str] = {
+# Physical dimensions of one full reticle slot (1x1). Measured from WSLG,
+# the reference full-slot design. Half-slot chips come out at ~1936x5122
+# (0.5x1) or ~3932x2531 (1x0.5), so the "full" W and H serve as the
+# denominators when converting a die's actual um dimensions back into
+# slot units for the info panel.
+SLOT_W_UM = 3932.0
+SLOT_H_UM = 5122.0
+
+# Slot size per project code, lifted from ws-run1/README.md. Used as a
+# cross-check against the size computed from the actual GDS die
+# dimensions — mismatches are flagged during generation so the dict
+# doesn't drift out of sync with the layout.
+PROJECT_SIZES_README: dict[str, str] = {
     "2975": "1x1", "AS03": "1x1", "BRWN": "1x1", "BTAP": "1x1",
     "CAFE": "1x1", "CHES": "1x1",
     "GD02": "0.5x1", "GD03": "1x1", "GD04": "1x0.5",
@@ -80,6 +89,24 @@ PROJECT_SIZES: dict[str, str] = {
     "TRID": "0.5x1", "TTP2": "1x1", "TTPG": "1x1",
     "TZ01": "1x1", "WSLG": "1x1",
 }
+
+
+def _fmt_slot_unit(v: float) -> str:
+    """Render a slot unit as '1' or '0.5', no trailing zeros."""
+    return str(int(v)) if v == int(v) else f"{v:g}"
+
+
+def computed_slot_size(die_w: float, die_h: float) -> str:
+    """Slot size inferred from the actual die dimensions, rounded to 0.5.
+
+    Used both in the info panel and as the source of truth for the
+    cross-check against PROJECT_SIZES_README. 0.5-slot designs measure
+    ~1936 um (half of SLOT_W_UM) or ~2531 um (half of SLOT_H_UM), so
+    rounding to the nearest half-unit snaps correctly to 0.5 / 1 / 2.
+    """
+    w_units = round(die_w / SLOT_W_UM * 2) / 2
+    h_units = round(die_h / SLOT_H_UM * 2) / 2
+    return f"{_fmt_slot_unit(w_units)}x{_fmt_slot_unit(h_units)}"
 
 # Colors per pad class (fill, text). Follows standard electronics convention:
 # grounds are black/grey, supplies are reds/oranges, signals are amber.
@@ -378,12 +405,14 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     # Corner markers from the wafer.space template: QR in bottom-left,
     # logo in top-right. Both render in the same yellow metal as the rest
     # of the chip, so they're hard to spot — overlay a thick coloured
-    # frame around each (slightly grown for visibility) and annotate with
-    # a label outside the frame. Colour alpha is low so the underlying
-    # logo shapes remain visible through the tint.
+    # frame around each (slightly grown for visibility), then annotate
+    # outside the die with a short leader line connecting the label to
+    # the frame. Keeping the label text outside the die avoids covering
+    # any of the chip artwork.
     qr_bb, logo_bb = _wsip_corners(die_bb)
     grow = max(die_w, die_h) * 0.005  # ~0.5% of die — bump frames outward
-    label_gap_m = max(die_w, die_h) * 0.012
+    # Label position offset from the die corner, into the outer margin.
+    label_off = margin * 0.28
     for bb, col, label, anchor in (
         (qr_bb, WSIP_QR_COLOR, "ID QR", "bl"),
         (logo_bb, WSIP_LOGO_COLOR, "wafer.space logo", "tr"),
@@ -399,15 +428,24 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
             zorder=2.5,
         ))
         if anchor == "bl":
-            # QR: put label to the right of the frame, vertically centered
-            ax.text(bx1 + label_gap_m * 0.3, 0.5 * (by0 + by1), label,
-                    color=col, fontsize=9, ha="left", va="center",
-                    family="monospace", fontweight="bold", zorder=3.5)
+            # QR sits in bottom-left; label goes in the outer bottom-left
+            # corner, down and left of the die. Leader line connects the
+            # frame's outer corner to the label anchor.
+            tx, ty = x0 - label_off, y0 - label_off
+            ha_l, va_l = "right", "top"
+            leader_from = (bx0, by0)
         else:
-            # Logo: put label below the frame, right-aligned to its right edge
-            ax.text(bx1, by0 - label_gap_m * 0.3, label,
-                    color=col, fontsize=9, ha="right", va="top",
-                    family="monospace", fontweight="bold", zorder=3.5)
+            # Logo sits in top-right; label in the outer top-right corner.
+            tx, ty = x1 + label_off, y1 + label_off
+            ha_l, va_l = "left", "bottom"
+            leader_from = (bx1, by1)
+        ax.plot(
+            [leader_from[0], tx], [leader_from[1], ty],
+            color=col, linewidth=1.0, alpha=0.8, zorder=3.4,
+        )
+        ax.text(tx, ty, label,
+                color=col, fontsize=10, ha=ha_l, va=va_l,
+                family="monospace", fontweight="bold", zorder=3.5)
 
     # Draw pads, colored by net class (signal / ground / power variants).
     labelled = unlabelled = 0
@@ -543,7 +581,10 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     # it doesn't try to reposition them afterwards.
     fig.tight_layout()
     code = _project_code(cell_name)
-    size = PROJECT_SIZES.get(code, "?")
+    # Size derived from the actual GDS die box, which is the source of
+    # truth. We cross-check against the README value elsewhere (in main)
+    # and print a warning if they diverge.
+    size = computed_slot_size(die_w, die_h)
 
     panel_h_in = 0.85
     qr_in = panel_h_in              # QR kept square
@@ -656,6 +697,19 @@ def main() -> None:
         # test structures and aren't part of the chip's pinout.
         pads = [p for p in pads if _is_peripheral(p, *die_bb)]
 
+        # Cross-check the README slot size against the actual GDS. A
+        # mismatch either means the README is stale or the chip was
+        # laid out at the wrong size; either way it's worth surfacing.
+        code = _project_code(name)
+        computed = computed_slot_size(
+            die_bb[2] - die_bb[0], die_bb[3] - die_bb[1])
+        readme = PROJECT_SIZES_README.get(code)
+        if readme is not None and readme != computed:
+            print(f"    WARNING: {code} README says {readme!r} but "
+                  f"GDS is {computed!r} "
+                  f"({die_bb[2] - die_bb[0]:.0f} x "
+                  f"{die_bb[3] - die_bb[1]:.0f} um)")
+
         out_png = OUT_DIR / f"{name}.png"
         out_svg = OUT_DIR / f"{name}.svg"
         out_pdf = OUT_DIR / f"{name}.pdf"
@@ -667,7 +721,8 @@ def main() -> None:
         labelled = sum(1 for p in pads if p.net)
         summary.append((name, len(pads), labelled))
         print(f"  [{i:>2}/{len(instances)}] {name}: {len(pads):>3} pads, "
-              f"{labelled:>3} labelled  ({time.time() - t_start:.1f}s)")
+              f"{labelled:>3} labelled  slot {computed}  "
+              f"({time.time() - t_start:.1f}s)")
 
     # Write a summary index.
     index = OUT_DIR / "index.md"
