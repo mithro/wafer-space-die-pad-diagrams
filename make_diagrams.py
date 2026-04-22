@@ -312,6 +312,66 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
         else:
             unlabelled += 1
 
+    # Per-pad adaptive fontsize. Each label is sized independently to be as
+    # large as possible while respecting two constraints:
+    #
+    #   1. Pad-to-neighbour spacing on its own edge: L/R labels render
+    #      horizontally, so their cap-height (≈ fontsize in pt) can't exceed
+    #      the min *vertical* spacing between L/R pads. T/B labels are
+    #      rotated 90°, so their cap-height can't exceed the min *horizontal*
+    #      spacing between T/B pads.
+    #   2. Margin room outward from the die: an N-char monospace label is
+    #      ~0.6·N·fontsize wide in points, so fontsize can't exceed
+    #      (margin in pt) / (0.6·N) or the label runs past the figure edge.
+    #
+    # Computing this per-label rather than globally means a single outlier
+    # like `CAPACITORS_MIM_2p0FF_8192FF_MAX_PERIM_1_PAD` (43 chars on TRID)
+    # doesn't shrink every short label on the chip — it just shrinks itself.
+    pt_per_um_x = 72.0 * fig_w / total_w
+    pt_per_um_y = 72.0 * fig_h / total_h
+    margin_pt_x = margin * pt_per_um_x
+    margin_pt_y = margin * pt_per_um_y
+    safety = 0.85
+
+    edge_ys: dict[str, list[float]] = {"L": [], "R": []}
+    edge_xs: dict[str, list[float]] = {"T": [], "B": []}
+    for p in pads:
+        e = _classify_edge(p, x0, y0, x1, y1)
+        if e in ("L", "R"):
+            edge_ys[e].append(p.cy)
+        else:
+            edge_xs[e].append(p.cx)
+
+    def _min_gap(coords: list[float]) -> float:
+        if len(coords) < 2:
+            return 1e9
+        s = sorted(coords)
+        return min(s[i + 1] - s[i] for i in range(len(s) - 1))
+
+    edge_height_cap: dict[str, float] = {
+        "L": _min_gap(edge_ys["L"]) * pt_per_um_y * safety,
+        "R": _min_gap(edge_ys["R"]) * pt_per_um_y * safety,
+        "T": _min_gap(edge_xs["T"]) * pt_per_um_x * safety,
+        "B": _min_gap(edge_xs["B"]) * pt_per_um_x * safety,
+    }
+    # Outward margin in pt is axis-dependent: L/R labels extend in x,
+    # T/B labels extend in y (because they're rotated 90°).
+    edge_margin_pt: dict[str, float] = {
+        "L": margin_pt_x,
+        "R": margin_pt_x,
+        "T": margin_pt_y,
+        "B": margin_pt_y,
+    }
+
+    def _pad_fontsize(pad: Pad) -> float:
+        edge = _classify_edge(pad, x0, y0, x1, y1)
+        name = pad.net or "?"
+        height_cap = edge_height_cap[edge]
+        # Width fit: 0.6 × fs × N chars must fit in the outward margin, with
+        # a 10% slack so the label never quite touches the figure edge.
+        width_cap = edge_margin_pt[edge] / (len(name) * 0.6) * 0.9
+        return max(4.0, min(height_cap, width_cap, 36.0))
+
     # Place each label directly in line with its pad (no leader lines).
     # L/R edge labels stay horizontal, sharing the pad's y-coordinate.
     # T/B edge labels are rotated 90°, sharing the pad's x-coordinate.
@@ -342,7 +402,7 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
             weight = "normal"
         ax.text(
             tx, ty, txt,
-            ha=ha, va=va, fontsize=6, color=color,
+            ha=ha, va=va, fontsize=_pad_fontsize(pad), color=color,
             family="monospace", zorder=3, rotation=rot,
             rotation_mode="anchor", fontweight=weight,
         )
