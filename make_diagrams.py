@@ -21,6 +21,7 @@ import klayout.lay as klay
 import matplotlib.image as mpimg
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
+import segno
 
 REPO = Path(__file__).resolve().parent.parent / "ws-run1"
 OAS = REPO / "layout" / "reticle.oas"
@@ -50,6 +51,35 @@ BG_VISIBLE_LAYERS: set[tuple[int, int]] = {
 
 # Minimum pad edge length in microns to count as an IO pad (not a seal ring).
 PAD_MIN_UM = 30.0
+
+# Positions of the standard ws-run1 template corner markers, pulled from
+# BTAP's direct-child instance probe (see probe_wsip.py):
+#   gf180mcu_ws_ip__id   — 143x143 um QR-like identifier, bottom-left,
+#                          sitting ~40/50 um in from the die corner.
+#   gf180mcu_ws_ip__logo — 143x143 um wafer.space logo, top-right,
+#                          sitting ~15 um in from the die corner.
+# The template applies the same offsets to every slot, so we can compute
+# highlight-frame positions from die_bb without probing the GDS.
+WSIP_CELL_UM = 143.0
+WSIP_QR_INSET_UM = (40.0, 50.0)   # from (die.x0, die.y0)
+WSIP_LOGO_INSET_UM = (15.0, 11.0)  # from (die.x1, die.y1)
+WSIP_QR_COLOR = "#00838f"   # deep cyan — contrasts yellow metal + red pads
+WSIP_LOGO_COLOR = "#ad1457"  # magenta — same
+
+# Slot size per project code, lifted from ws-run1/README.md. Used in the
+# bottom-right info panel; "1x1" is the default for any code not listed.
+# Suffix "p5" in the README means ".5", which we normalise for display.
+PROJECT_SIZES: dict[str, str] = {
+    "2975": "1x1", "AS03": "1x1", "BRWN": "1x1", "BTAP": "1x1",
+    "CAFE": "1x1", "CHES": "1x1",
+    "GD02": "0.5x1", "GD03": "1x1", "GD04": "1x0.5",
+    "HZ80": "0.5x1", "ISHI": "1x1", "JKU1": "1x1", "JKU2": "1x0.5",
+    "KIAN": "1x1", "MOLE": "1x1", "MOS2": "1x1", "MOSB": "1x1",
+    "OCD1": "1x1", "OCD2": "1x0.5", "RBOY": "1x1", "RZ80": "1x1",
+    "TQVA": "0.5x0.5", "TQVB": "0.5x1", "TQVC": "1x0.5",
+    "TRID": "0.5x1", "TTP2": "1x1", "TTPG": "1x1",
+    "TZ01": "1x1", "WSLG": "1x1",
+}
 
 # Colors per pad class (fill, text). Follows standard electronics convention:
 # grounds are black/grey, supplies are reds/oranges, signals are amber.
@@ -248,6 +278,56 @@ def render_gds_background(lv: klay.LayoutView, cell_name: str, layout: kdb.Layou
     lv.save_image(str(out_path), w_px, h_px)
 
 
+def _wsip_corners(die_bb: tuple[float, float, float, float]
+                   ) -> tuple[tuple[float, float, float, float],
+                              tuple[float, float, float, float]]:
+    """(qr_bbox, logo_bbox) for the ws-run1 template corner markers."""
+    x0, y0, x1, y1 = die_bb
+    qx0 = x0 + WSIP_QR_INSET_UM[0]
+    qy0 = y0 + WSIP_QR_INSET_UM[1]
+    qr = (qx0, qy0, qx0 + WSIP_CELL_UM, qy0 + WSIP_CELL_UM)
+    lx1 = x1 - WSIP_LOGO_INSET_UM[0]
+    ly1 = y1 - WSIP_LOGO_INSET_UM[1]
+    logo = (lx1 - WSIP_CELL_UM, ly1 - WSIP_CELL_UM, lx1, ly1)
+    return qr, logo
+
+
+def _project_code(cell_name: str) -> str:
+    """First underscore-delimited token, used as the README project code."""
+    return cell_name.split("_", 1)[0]
+
+
+def _draw_qr_on_ax(ax: plt.Axes, data: str, fg: str = "#111",
+                   bg: str | None = None) -> None:
+    """Render a QR code encoding `data` into the given matplotlib axes.
+
+    Draws each 'on' module as a filled 1x1 rectangle in axes units and sets
+    the axis limits to the QR's module grid. segno gives us the 2-D matrix
+    directly, which sidesteps needing PIL or writing a temporary PNG.
+    """
+    qr = segno.make(data, error="m")
+    matrix = list(qr.matrix)
+    n = len(matrix)
+    if bg is not None:
+        ax.add_patch(mpatches.Rectangle((0, 0), n, n, facecolor=bg,
+                                        edgecolor="none"))
+    for row_idx, row in enumerate(matrix):
+        for col_idx, bit in enumerate(row):
+            if bit:
+                # Matrix rows go top-to-bottom; invert y so QR reads upright.
+                ax.add_patch(mpatches.Rectangle(
+                    (col_idx, n - 1 - row_idx), 1, 1,
+                    facecolor=fg, edgecolor="none",
+                ))
+    ax.set_xlim(0, n)
+    ax.set_ylim(0, n)
+    ax.set_aspect("equal")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+
 def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, float],
            out_png: Path, out_svg: Path,
            background_image: Path | None = None) -> None:
@@ -293,6 +373,40 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
         (x0, y0), die_w, die_h,
         linewidth=1.0, edgecolor="#222", facecolor="none", zorder=1.5,
     ))
+
+    # Corner markers from the wafer.space template: QR in bottom-left,
+    # logo in top-right. Both render in the same yellow metal as the rest
+    # of the chip, so they're hard to spot — overlay a thick coloured
+    # frame around each (slightly grown for visibility) and annotate with
+    # a label outside the frame. Colour alpha is low so the underlying
+    # logo shapes remain visible through the tint.
+    qr_bb, logo_bb = _wsip_corners(die_bb)
+    grow = max(die_w, die_h) * 0.005  # ~0.5% of die — bump frames outward
+    label_gap_m = max(die_w, die_h) * 0.012
+    for bb, col, label, anchor in (
+        (qr_bb, WSIP_QR_COLOR, "ID QR", "bl"),
+        (logo_bb, WSIP_LOGO_COLOR, "wafer.space logo", "tr"),
+    ):
+        bx0, by0, bx1, by1 = bb
+        bx0 -= grow
+        by0 -= grow
+        bx1 += grow
+        by1 += grow
+        ax.add_patch(mpatches.Rectangle(
+            (bx0, by0), bx1 - bx0, by1 - by0,
+            linewidth=3.0, edgecolor=col, facecolor=col, alpha=0.22,
+            zorder=2.5,
+        ))
+        if anchor == "bl":
+            # QR: put label to the right of the frame, vertically centered
+            ax.text(bx1 + label_gap_m * 0.3, 0.5 * (by0 + by1), label,
+                    color=col, fontsize=9, ha="left", va="center",
+                    family="monospace", fontweight="bold", zorder=3.5)
+        else:
+            # Logo: put label below the frame, right-aligned to its right edge
+            ax.text(bx1, by0 - label_gap_m * 0.3, label,
+                    color=col, fontsize=9, ha="right", va="top",
+                    family="monospace", fontweight="bold", zorder=3.5)
 
     # Draw pads, colored by net class (signal / ground / power variants).
     labelled = unlabelled = 0
@@ -419,7 +533,38 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     )
     ax.grid(True, which="both", linewidth=0.3, alpha=0.4)
 
+    # Info panel in the bottom-right: project code (big), slot size (small),
+    # QR code of the cell name. Dimensions are in absolute inches so the
+    # panel reads at the same scale no matter the chip's aspect ratio —
+    # without this, narrow chips like TRID render a figure only ~6" wide
+    # and a fraction-based panel ends up too cramped for the project
+    # code. tight_layout() is called *before* placing the overlay axes so
+    # it doesn't try to reposition them afterwards.
     fig.tight_layout()
+    code = _project_code(cell_name)
+    size = PROJECT_SIZES.get(code, "?")
+
+    panel_h_in = 0.85
+    qr_in = panel_h_in              # QR kept square
+    text_w_in = 1.4
+    gutter_in = 0.08
+    gap_in = 0.10
+    panel_w_in = text_w_in + gap_in + qr_in + 2 * gutter_in
+
+    text_x = 1.0 - (panel_w_in - gutter_in) / fig_w
+    text_y = gutter_in / fig_h
+    ax_text = fig.add_axes((text_x, text_y,
+                            text_w_in / fig_w, panel_h_in / fig_h))
+    ax_text.axis("off")
+    ax_text.text(0, 0.85, code, fontsize=30, fontweight="bold",
+                 family="monospace", color="#111", ha="left", va="top")
+    ax_text.text(0, 0.08, f"slot {size}", fontsize=11, family="monospace",
+                 color="#555", ha="left", va="bottom")
+
+    qr_x = text_x + (text_w_in + gap_in) / fig_w
+    ax_qr = fig.add_axes((qr_x, text_y, qr_in / fig_w, qr_in / fig_h))
+    _draw_qr_on_ax(ax_qr, cell_name, fg="#111", bg="#ffffff")
+
     fig.savefig(out_png, dpi=180)
     fig.savefig(out_svg)
     plt.close(fig)
