@@ -329,10 +329,11 @@ def _draw_qr_on_ax(ax: plt.Axes, data: str, fg: str = "#111",
 
 
 def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, float],
-           out_png: Path, out_svg: Path,
+           out_png: Path, out_svg: Path, out_pdf: Path | None = None,
            background_image: Path | None = None) -> None:
     """Render pad diagram. If background_image is given, use it as the
-    die-area background (typically a KLayout GDS render of the cell)."""
+    die-area background (typically a KLayout GDS render of the cell).
+    Writes PNG + SVG, plus PDF if out_pdf is supplied."""
     x0, y0, x1, y1 = die_bb
     die_w = x1 - x0
     die_h = y1 - y0
@@ -567,6 +568,8 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
 
     fig.savefig(out_png, dpi=180)
     fig.savefig(out_svg)
+    if out_pdf is not None:
+        fig.savefig(out_pdf)
     plt.close(fig)
 
 
@@ -655,9 +658,11 @@ def main() -> None:
 
         out_png = OUT_DIR / f"{name}.png"
         out_svg = OUT_DIR / f"{name}.svg"
+        out_pdf = OUT_DIR / f"{name}.pdf"
         bg_png = bg_cache / f"{name}.png"
         render_gds_background(lv, name, layout, die_bb, bg_png)
-        render(name, pads, die_bb, out_png, out_svg, background_image=bg_png)
+        render(name, pads, die_bb, out_png, out_svg, out_pdf,
+               background_image=bg_png)
 
         labelled = sum(1 for p in pads if p.net)
         summary.append((name, len(pads), labelled))

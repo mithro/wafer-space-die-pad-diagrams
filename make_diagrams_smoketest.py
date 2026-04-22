@@ -46,7 +46,9 @@ def main() -> None:
         render_gds_background(lv, name, layout, die, bg_png)
         out_png = OUT_DIR / f"{name}.png"
         out_svg = OUT_DIR / f"{name}.svg"
-        render(name, pads, die, out_png, out_svg, background_image=bg_png)
+        out_pdf = OUT_DIR / f"{name}.pdf"
+        render(name, pads, die, out_png, out_svg, out_pdf,
+               background_image=bg_png)
         labelled = sum(1 for p in pads if p.net)
         print(f"  {name}: {len(pads)} pads, {labelled} labelled  "
               f"({time.time() - t0:.1f}s)")
