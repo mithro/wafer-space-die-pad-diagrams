@@ -341,41 +341,39 @@ def _add_corner_zoom(fig: plt.Figure, ax: plt.Axes,
                      die_bb: tuple[float, float, float, float],
                      corner: str,
                      crop_um: float,
-                     inset_xy_in: tuple[float, float],
-                     inset_size_in: float) -> None:
+                     axes_bbox: tuple[float, float, float, float]) -> None:
     """Draw a zoomed inset of `corner` of the GDS background render.
 
-    `corner` is one of 'tl', 'tr', 'bl', 'br'. The inset is an axes placed
-    at `inset_xy_in` (bottom-left, absolute inches from figure origin),
-    sized `inset_size_in` square. A red border goes around the inset, a
-    red rectangle marks the cropped region on the main axes, and a
-    ConnectionPatch links the two — crossing the axes boundary, which is
-    why we can't use `ax.indicate_inset_zoom` (that requires the inset
-    to be a child of the main axes).
+    `corner` is one of 'tl', 'tr', 'bl', 'br'. The inset is placed via
+    `ax.inset_axes(axes_bbox)` using axes-relative coordinates, which
+    lets it sit in the empty corner region of the axes margin — the
+    rectangle bounded by the die edge on two sides and the axes boundary
+    on the other two. Pad labels in the L/R strips never reach above y1
+    or below y0, and T/B labels never reach left of x0 or right of x1,
+    so those corner regions are guaranteed free.
+
+    A red rectangle on the main axes marks the crop, and a
+    ConnectionPatch draws a leader line between them.
     """
     x0, y0, x1, y1 = die_bb
     if corner == "tl":
         zb = (x0, y1 - crop_um, x0 + crop_um, y1)
-        connect_from = (x0, y1 - crop_um)  # bottom-left of zoom box
-        connect_to_axfrac = (1.0, 0.0)      # bottom-right of inset
+        connect_from = (x0 + crop_um, y1 - crop_um)  # bottom-right of zoom
+        connect_to_axfrac = (1.0, 0.0)                # bottom-right of inset
     elif corner == "tr":
         zb = (x1 - crop_um, y1 - crop_um, x1, y1)
-        connect_from = (x1, y1 - crop_um)
-        connect_to_axfrac = (0.0, 0.0)      # bottom-left of inset
+        connect_from = (x1 - crop_um, y1 - crop_um)  # bottom-left of zoom
+        connect_to_axfrac = (0.0, 0.0)                # bottom-left of inset
     elif corner == "bl":
         zb = (x0, y0, x0 + crop_um, y0 + crop_um)
-        connect_from = (x0, y0 + crop_um)
-        connect_to_axfrac = (1.0, 1.0)      # top-right of inset
+        connect_from = (x0 + crop_um, y0 + crop_um)  # top-right of zoom
+        connect_to_axfrac = (1.0, 1.0)                # top-right of inset
     else:  # br
         zb = (x1 - crop_um, y0, x1, y0 + crop_um)
-        connect_from = (x1, y0 + crop_um)
-        connect_to_axfrac = (0.0, 1.0)      # top-left of inset
+        connect_from = (x1 - crop_um, y0 + crop_um)  # top-left of zoom
+        connect_to_axfrac = (0.0, 1.0)                # top-left of inset
 
-    fig_w, fig_h = fig.get_size_inches()
-    axins = fig.add_axes((
-        inset_xy_in[0] / fig_w, inset_xy_in[1] / fig_h,
-        inset_size_in / fig_w, inset_size_in / fig_h,
-    ), zorder=6)
+    axins = ax.inset_axes(axes_bbox, zorder=6)
     img = mpimg.imread(str(background_image))
     axins.imshow(img, extent=(x0, x1, y0, y1), origin="upper",
                  interpolation="bilinear", aspect="auto")
@@ -393,7 +391,7 @@ def _add_corner_zoom(fig: plt.Figure, ax: plt.Axes,
         linewidth=1.6, edgecolor="red", facecolor="none", zorder=5,
     ))
 
-    # Connector line from the main-axes zoom box back to the inset corner.
+    # Leader line from the zoom box corner to the matching inset corner.
     fig.add_artist(ConnectionPatch(
         xyA=connect_from, coordsA=ax.transData,
         xyB=connect_to_axfrac, coordsB=axins.transAxes,
@@ -460,6 +458,10 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     else:
         fig_h = canvas
         fig_w = canvas * total_w / total_h
+    # Aliases kept for the font-sizing code below; with no outer strip
+    # these equal the figure dimensions.
+    plot_w_in = fig_w
+    plot_h_in = fig_h
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
     # GDS render as background, or plain fill if none supplied.
@@ -557,8 +559,11 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     # Computing this per-label rather than globally means a single outlier
     # like `CAPACITORS_MIM_2p0FF_8192FF_MAX_PERIM_1_PAD` (43 chars on TRID)
     # doesn't shrink every short label on the chip — it just shrinks itself.
-    pt_per_um_x = 72.0 * fig_w / total_w
-    pt_per_um_y = 72.0 * fig_h / total_h
+    # Font sizing uses the inner plot dimensions (plot_w_in / plot_h_in),
+    # not the full figure. The figure is padded with inset_strip_in on
+    # every side which belongs to the zoom-inset strip, not the axes.
+    pt_per_um_x = 72.0 * plot_w_in / total_w
+    pt_per_um_y = 72.0 * plot_h_in / total_h
     margin_pt_x = margin * pt_per_um_x
     margin_pt_y = margin * pt_per_um_y
     safety = 0.85
@@ -649,25 +654,22 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     )
     ax.grid(True, which="both", linewidth=0.3, alpha=0.4)
 
-    # Info panel in the bottom-right: project code (big), slot size (small),
-    # QR code of the cell name. Dimensions are in absolute inches so the
-    # panel reads at the same scale no matter the chip's aspect ratio —
-    # without this, narrow chips like TRID render a figure only ~6" wide
-    # and a fraction-based panel ends up too cramped for the project
-    # code. tight_layout() is called *before* placing the overlay axes so
-    # it doesn't try to reposition them afterwards.
+    # tight_layout before placing the overlay axes so it doesn't try to
+    # reposition them afterwards.
     fig.tight_layout()
+
+    # Info panel in the bottom-right: project code (big), slot size
+    # (small), QR image. The QR is cropped from the GDS render at the
+    # ws-template ID cell's position, so it matches the QR drawn in the
+    # chip's own bottom-left corner exactly.
     code = _project_code(cell_name)
-    # Size derived from the actual GDS die box, which is the source of
-    # truth. We cross-check against the README value elsewhere (in main)
-    # and print a warning if they diverge.
     size = computed_slot_size(die_w, die_h)
 
-    panel_h_in = 0.85
-    qr_in = panel_h_in              # QR kept square
-    text_w_in = 1.4
+    panel_h_in = 0.9
+    qr_in = panel_h_in
+    text_w_in = 1.5
     gutter_in = 0.08
-    gap_in = 0.10
+    gap_in = 0.12
     panel_w_in = text_w_in + gap_in + qr_in + 2 * gutter_in
 
     text_x = 1.0 - (panel_w_in - gutter_in) / fig_w
@@ -682,29 +684,46 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
 
     qr_x = text_x + (text_w_in + gap_in) / fig_w
     ax_qr = fig.add_axes((qr_x, text_y, qr_in / fig_w, qr_in / fig_h))
-    _draw_qr_on_ax(ax_qr, cell_name, fg="#111", bg="#ffffff")
-
-    # Zoom insets for each die corner. Position each inset at the outer
-    # corresponding corner of the figure in absolute inches so size is
-    # consistent across chip aspects; the bottom-right inset is bumped
-    # up to sit above the info panel rather than overlap it. Crop
-    # window is a fixed ZOOM_CROP_UM on a side, clamped so it never
-    # exceeds half the shortest die edge.
     if background_image is not None and background_image.exists():
-        zoom_size_in = 1.6
-        zoom_pad_in = 0.1
+        img = mpimg.imread(str(background_image))
+        ax_qr.imshow(img, extent=(x0, x1, y0, y1), origin="upper",
+                     interpolation="nearest", aspect="auto")
+        ax_qr.set_xlim(qr_bb[0], qr_bb[2])
+        ax_qr.set_ylim(qr_bb[1], qr_bb[3])
+        ax_qr.set_xticks([])
+        ax_qr.set_yticks([])
+        for spine in ax_qr.spines.values():
+            spine.set_edgecolor("#111")
+            spine.set_linewidth(0.8)
+    else:
+        _draw_qr_on_ax(ax_qr, cell_name, fg="#111", bg="#ffffff")
+
+    # Zoom insets tucked into the empty corner regions of the axes
+    # margin — rectangles bounded by the die edge on two sides and the
+    # axes boundary on the other two. These regions contain no pad
+    # labels (L/R labels are vertical strips next to the die; T/B
+    # labels are horizontal strips above/below), so the insets never
+    # collide with any label text. Positions are axes-relative; the
+    # inset size in axes fractions is set so the inset comes close to
+    # filling the margin corner.
+    if background_image is not None and background_image.exists():
         crop_um = min(ZOOM_CROP_UM, 0.5 * min(die_w, die_h))
-        br_y = panel_h_in + 2 * gutter_in    # above info panel
-        corner_positions = {
-            "tl": (zoom_pad_in, fig_h - zoom_size_in - zoom_pad_in),
-            "tr": (fig_w - zoom_size_in - zoom_pad_in,
-                   fig_h - zoom_size_in - zoom_pad_in),
-            "bl": (zoom_pad_in, zoom_pad_in),
-            "br": (fig_w - zoom_size_in - zoom_pad_in, br_y),
+        # Fraction of the axes spanned by the margin in each axis.
+        margin_fx = margin / total_w
+        margin_fy = margin / total_h
+        # Leave a small gap between the inset and the die/axes edges.
+        pad = 0.015
+        inset_w = margin_fx - 2 * pad
+        inset_h = margin_fy - 2 * pad
+        corner_axes_bbox = {
+            "tl": (pad, 1 - margin_fy + pad, inset_w, inset_h),
+            "tr": (1 - margin_fx + pad, 1 - margin_fy + pad, inset_w, inset_h),
+            "bl": (pad, pad, inset_w, inset_h),
+            "br": (1 - margin_fx + pad, pad, inset_w, inset_h),
         }
-        for corner, xy in corner_positions.items():
+        for corner, bbox in corner_axes_bbox.items():
             _add_corner_zoom(fig, ax, background_image, die_bb,
-                             corner, crop_um, xy, zoom_size_in)
+                             corner, crop_um, bbox)
 
     fig.savefig(out_png, dpi=180)
     fig.savefig(out_svg)
