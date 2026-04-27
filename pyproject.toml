@@ -8,3 +8,8 @@ dependencies = [
     "matplotlib>=3.10.8",
     "segno>=1.6.0",
 ]
+
+[dependency-groups]
+dev = [
+    "opencv-python-headless>=4.13.0.92",
+]
