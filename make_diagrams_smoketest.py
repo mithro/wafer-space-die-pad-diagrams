@@ -12,12 +12,9 @@ from make_diagrams import (OAS, OUT_DIR, _is_peripheral, _rotate_image_180,
 
 SMOKE_TARGETS = [
     "WSLG_chip_top_10_2",          # matches the README reference image
-    # Re-enable for full smoketest after the layout fix loop:
-    # "TQVA_chip_top_14_8",
-    # "KIAN_chip_top_8_0",
-    # "ISHI_ISHI-KAI_WS_RUN1_12_4",
-    # "MOS2_chip_top_10_6",
-    # "TRID_TOP_14_2",
+    "TRID_TOP_14_2",               # has very long pad names
+    "TQVA_chip_top_14_8",           # smallest 0.5x0.5 chip
+    "ISHI_ISHI-KAI_WS_RUN1_12_4",   # busy interior
 ]
 
 

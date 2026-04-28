@@ -712,12 +712,20 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     ax.set_xlabel("x (µm)", fontsize=16)
     ax.set_ylabel("y (µm)", fontsize=16)
     ax.tick_params(axis="both", labelsize=14)
-    ax.set_title(
-        f"{cell_name}\n"
+    # Shrink title size on narrow figures so it doesn't overflow the
+    # right edge — TRID and the half-width chips have fig_w around 7"
+    # which can't fit a 22pt 50-char subtitle. Cap at 22pt for the wide
+    # chips (where there's room) and floor at 14pt for legibility.
+    title_lines = [
+        cell_name,
         f"{die_w:.0f} × {die_h:.0f} µm  ·  "
         f"{labelled} labelled pads, {unlabelled} unlabelled",
-        fontsize=22, fontweight="bold", pad=14,
-    )
+    ]
+    title_chars = max(len(line) for line in title_lines)
+    title_max_pt = (fig_w * 72) / (title_chars * 0.6) * 0.95
+    title_fontsize = max(14.0, min(22.0, title_max_pt))
+    ax.set_title("\n".join(title_lines),
+                 fontsize=title_fontsize, fontweight="bold", pad=14)
     ax.grid(True, which="both", linewidth=0.8, alpha=0.7,
             color="#888", linestyle="--")
 
