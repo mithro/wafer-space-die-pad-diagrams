@@ -343,15 +343,56 @@ def render_gds_background(lv: klay.LayoutView, cell_name: str, layout: kdb.Layou
 def _wsip_corners(die_bb: tuple[float, float, float, float]
                    ) -> tuple[tuple[float, float, float, float],
                               tuple[float, float, float, float]]:
-    """(qr_bbox, logo_bbox) for the ws-run1 template corner markers."""
+    """(qr_bbox, logo_bbox) after the chip has been rotated 180°.
+
+    In the GDS the QR cell sits inset from (die.x0, die.y0) — the
+    bottom-left corner — and the logo sits inset from (die.x1, die.y1)
+    — the top-right corner. We display the chip rotated 180° around
+    its centre so the QR ends up in the conventional top-right corner
+    that the wafer.space documentation expects, with the logo moving
+    to the bottom-left. The inset distances themselves are unchanged
+    by rotation; only the reference corner swaps.
+    """
     x0, y0, x1, y1 = die_bb
-    qx0 = x0 + WSIP_QR_INSET_UM[0]
-    qy0 = y0 + WSIP_QR_INSET_UM[1]
-    qr = (qx0, qy0, qx0 + WSIP_CELL_UM, qy0 + WSIP_CELL_UM)
-    lx1 = x1 - WSIP_LOGO_INSET_UM[0]
-    ly1 = y1 - WSIP_LOGO_INSET_UM[1]
-    logo = (lx1 - WSIP_CELL_UM, ly1 - WSIP_CELL_UM, lx1, ly1)
+    # QR now in the top-right, inset from (x1, y1).
+    qx1 = x1 - WSIP_QR_INSET_UM[0]
+    qy1 = y1 - WSIP_QR_INSET_UM[1]
+    qr = (qx1 - WSIP_CELL_UM, qy1 - WSIP_CELL_UM, qx1, qy1)
+    # Logo now in the bottom-left, inset from (x0, y0).
+    lx0 = x0 + WSIP_LOGO_INSET_UM[0]
+    ly0 = y0 + WSIP_LOGO_INSET_UM[1]
+    logo = (lx0, ly0, lx0 + WSIP_CELL_UM, ly0 + WSIP_CELL_UM)
     return qr, logo
+
+
+def _rotate_pad_180(pad: Pad, die_bb: tuple[float, float, float, float]
+                    ) -> Pad:
+    """Rotate a single pad 180° around the die centre.
+
+    Real data rotation, not an axis flip — the pad's coordinates change
+    so all downstream logic (edge classification, label placement, the
+    info-panel info) still operates in a single consistent coordinate
+    space. After rotation an L-edge pad becomes an R-edge pad, etc.,
+    which is exactly what we want when we view the chip from the
+    rotated orientation.
+    """
+    x0, y0, x1, y1 = die_bb
+    cx2 = x0 + x1
+    cy2 = y0 + y1
+    return Pad(
+        x0=cx2 - pad.x1,
+        y0=cy2 - pad.y1,
+        x1=cx2 - pad.x0,
+        y1=cy2 - pad.y0,
+        net=pad.net,
+    )
+
+
+def _rotate_image_180(path: Path) -> None:
+    """Rotate the BG render PNG 180° in-place using PIL."""
+    from PIL import Image
+    img = Image.open(path)
+    img.rotate(180).save(path)
 
 
 def _project_code(cell_name: str) -> str:
@@ -525,9 +566,12 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     grow = max(die_w, die_h) * 0.005  # ~0.5% of die — bump frames outward
     # Label position offset from the die corner, into the outer margin.
     label_off = margin * 0.28
+    # After 180° rotation the QR sits in the top-right and the logo in
+    # the bottom-left, so each annotation's outer-margin label and
+    # leader line are anchored to the corner the cell now occupies.
     for bb, col, label, anchor in (
-        (qr_bb, WSIP_QR_COLOR, "ID QR", "bl"),
-        (logo_bb, WSIP_LOGO_COLOR, "wafer.space logo", "tr"),
+        (qr_bb, WSIP_QR_COLOR, "ID QR", "tr"),
+        (logo_bb, WSIP_LOGO_COLOR, "wafer.space logo", "bl"),
     ):
         bx0, by0, bx1, by1 = bb
         bx0 -= grow
@@ -540,14 +584,12 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
             zorder=2.5,
         ))
         if anchor == "bl":
-            # QR sits in bottom-left; label goes in the outer bottom-left
-            # corner, down and left of the die. Leader line connects the
-            # frame's outer corner to the label anchor.
+            # Logo sits in bottom-left; label in outer bottom-left.
             tx, ty = x0 - label_off, y0 - label_off
             ha_l, va_l = "right", "top"
             leader_from = (bx0, by0)
         else:
-            # Logo sits in top-right; label in the outer top-right corner.
+            # QR sits in top-right; label in outer top-right.
             tx, ty = x1 + label_off, y1 + label_off
             ha_l, va_l = "left", "bottom"
             leader_from = (bx1, by1)
@@ -856,6 +898,12 @@ def main() -> None:
         # test structures and aren't part of the chip's pinout.
         pads = [p for p in pads if _is_peripheral(p, *die_bb)]
 
+        # Rotate the entire chip 180° so the QR cell sits in the
+        # top-right corner (the wafer.space convention) instead of the
+        # GDS-native bottom-left. die_bb is invariant under 180°
+        # rotation around its own centre, so it stays the same.
+        pads = [_rotate_pad_180(p, die_bb) for p in pads]
+
         # Cross-check the README slot size against the actual GDS. A
         # mismatch either means the README is stale or the chip was
         # laid out at the wrong size; either way it's worth surfacing.
@@ -874,6 +922,9 @@ def main() -> None:
         out_pdf = OUT_DIR / f"{name}.pdf"
         bg_png = bg_cache / f"{name}.png"
         render_gds_background(lv, name, layout, die_bb, bg_png)
+        # KLayout writes the chip in its native orientation; rotate the
+        # raster 180° to match the rotated pad coords above.
+        _rotate_image_180(bg_png)
         render(name, pads, die_bb, out_png, out_svg, out_pdf,
                background_image=bg_png)
 

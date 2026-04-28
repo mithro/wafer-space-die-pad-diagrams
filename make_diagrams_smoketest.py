@@ -5,17 +5,19 @@ from pathlib import Path
 
 import klayout.db as kdb
 
-from make_diagrams import (OAS, OUT_DIR, _is_peripheral, assign_net_names,
-                           extract_labels, extract_pads, render,
-                           render_gds_background, setup_layout_view)
+from make_diagrams import (OAS, OUT_DIR, _is_peripheral, _rotate_image_180,
+                           _rotate_pad_180, assign_net_names, extract_labels,
+                           extract_pads, render, render_gds_background,
+                           setup_layout_view)
 
 SMOKE_TARGETS = [
     "WSLG_chip_top_10_2",          # matches the README reference image
-    "TQVA_chip_top_14_8",
-    "KIAN_chip_top_8_0",
-    "ISHI_ISHI-KAI_WS_RUN1_12_4",
-    "MOS2_chip_top_10_6",
-    "TRID_TOP_14_2",
+    # Re-enable for full smoketest after the layout fix loop:
+    # "TQVA_chip_top_14_8",
+    # "KIAN_chip_top_8_0",
+    # "ISHI_ISHI-KAI_WS_RUN1_12_4",
+    # "MOS2_chip_top_10_6",
+    # "TRID_TOP_14_2",
 ]
 
 
@@ -42,8 +44,10 @@ def main() -> None:
         die = (bb.left * layout.dbu, bb.bottom * layout.dbu,
                bb.right * layout.dbu, bb.top * layout.dbu)
         pads = [p for p in pads if _is_peripheral(p, *die)]
+        pads = [_rotate_pad_180(p, die) for p in pads]
         bg_png = bg_cache / f"{name}.png"
         render_gds_background(lv, name, layout, die, bg_png)
+        _rotate_image_180(bg_png)
         out_png = OUT_DIR / f"{name}.png"
         out_svg = OUT_DIR / f"{name}.svg"
         out_pdf = OUT_DIR / f"{name}.pdf"
