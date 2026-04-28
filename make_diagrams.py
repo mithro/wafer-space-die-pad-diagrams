@@ -720,8 +720,9 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     ax.set_xlim(x0 - margin, x1 + margin)
     ax.set_ylim(y0 - margin, y1 + margin)
     ax.set_aspect("equal")
-    ax.set_xlabel("x (um)")
-    ax.set_ylabel("y (um)")
+    ax.set_xlabel("x (µm)", fontsize=16)
+    ax.set_ylabel("y (µm)", fontsize=16)
+    ax.tick_params(axis="both", labelsize=14)
     ax.set_title(
         f"{cell_name}\n"
         f"{die_w:.0f} × {die_h:.0f} µm  ·  "
