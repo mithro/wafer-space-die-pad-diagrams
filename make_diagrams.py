@@ -521,7 +521,11 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     margin = max(die_w, die_h) * 0.20
     label_gap = max(die_w, die_h) * 0.003
 
-    # Figure: fit the die into a 14" bounding box preserving aspect ratio.
+    # Figure: fit the die into a 14" bounding box preserving aspect ratio,
+    # then add a dedicated bottom strip (panel_strip_in) for the info
+    # panel. tight_layout below is told to ignore that strip via
+    # `rect=`, so the chip plot stays in the upper portion and the
+    # x-axis label/tick labels never collide with the panel.
     # Fixed size keeps font pixel-height consistent across all designs.
     canvas = 14.0
     total_w = die_w + 2 * margin
@@ -532,10 +536,13 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     else:
         fig_h = canvas
         fig_w = canvas * total_w / total_h
-    # Aliases kept for the font-sizing code below; with no outer strip
-    # these equal the figure dimensions.
+    panel_strip_in = 1.3
+    fig_h += panel_strip_in
+    # Aliases kept for the font-sizing code below; reflect the chip
+    # plot region (excluding the panel strip) so labels still size to
+    # the area available next to pads.
     plot_w_in = fig_w
-    plot_h_in = fig_h
+    plot_h_in = fig_h - panel_strip_in
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
     # GDS render as background, or plain fill if none supplied.
@@ -733,8 +740,12 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
             color="#888", linestyle="--")
 
     # tight_layout before placing the overlay axes so it doesn't try to
-    # reposition them afterwards.
-    fig.tight_layout()
+    # reposition them afterwards. The `rect` argument restricts the
+    # layout to ignore the bottom panel_strip_in inches — that area is
+    # reserved for the info panel and tight_layout would otherwise pull
+    # the chip plot into it.
+    panel_strip_frac = panel_strip_in / fig_h
+    fig.tight_layout(rect=(0, panel_strip_frac, 1, 1))
 
     # Info panel in the bottom-right: project code (big), slot size
     # (small), QR image. The QR encodes "G801<PROJ>" — the shuttle ID
@@ -746,25 +757,27 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     code = _project_code(cell_name)
     size = computed_slot_size(die_w, die_h)
 
-    panel_h_in = 0.9
+    panel_h_in = 1.0
     qr_in = panel_h_in
-    text_w_in = 1.5
-    gutter_in = 0.08
-    gap_in = 0.12
-    panel_w_in = text_w_in + gap_in + qr_in + 2 * gutter_in
+    text_w_in = 2.4
+    gutter_x_in = 0.30
+    gap_in = 0.18
+    panel_w_in = text_w_in + gap_in + qr_in + 2 * gutter_x_in
 
-    text_x = 1.0 - (panel_w_in - gutter_in) / fig_w
-    text_y = gutter_in / fig_h
-    ax_text = fig.add_axes((text_x, text_y,
+    # Centre the panel inside the bottom strip vertically, and pin it to
+    # the right edge of the figure with a small horizontal gutter.
+    panel_y = (panel_strip_in - panel_h_in) / 2 / fig_h
+    text_x = 1.0 - (panel_w_in - gutter_x_in) / fig_w
+    ax_text = fig.add_axes((text_x, panel_y,
                             text_w_in / fig_w, panel_h_in / fig_h))
     ax_text.axis("off")
-    ax_text.text(0, 0.85, code, fontsize=30, fontweight="bold",
+    ax_text.text(0, 0.78, code, fontsize=42, fontweight="bold",
                  family="monospace", color="#111", ha="left", va="top")
-    ax_text.text(0, 0.08, f"slot {size}", fontsize=11, family="monospace",
+    ax_text.text(0, 0.10, f"slot {size}", fontsize=18, family="monospace",
                  color="#555", ha="left", va="bottom")
 
     qr_x = text_x + (text_w_in + gap_in) / fig_w
-    ax_qr = fig.add_axes((qr_x, text_y, qr_in / fig_w, qr_in / fig_h))
+    ax_qr = fig.add_axes((qr_x, panel_y, qr_in / fig_w, qr_in / fig_h))
     qr_data = f"{WSIP_QR_DATA_PREFIX}{code}"
     qr_mask = WSIP_QR_PROJECT_MASKS.get(code)  # None → segno auto-picks
     _draw_qr_on_ax(ax_qr, qr_data,
