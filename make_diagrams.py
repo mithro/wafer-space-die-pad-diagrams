@@ -729,7 +729,8 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
         f"{labelled} labelled pads, {unlabelled} unlabelled",
         fontsize=22, fontweight="bold", pad=14,
     )
-    ax.grid(True, which="both", linewidth=0.3, alpha=0.4)
+    ax.grid(True, which="both", linewidth=0.8, alpha=0.7,
+            color="#888", linestyle="--")
 
     # tight_layout before placing the overlay axes so it doesn't try to
     # reposition them afterwards.
