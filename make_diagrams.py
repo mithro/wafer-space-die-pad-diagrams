@@ -505,27 +505,40 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
 
     # Figure: fit the die into a 14" bounding box preserving aspect ratio,
     # then add a dedicated bottom strip (panel_strip_in) for the info
-    # panel. tight_layout below is told to ignore that strip via
-    # `rect=`, so the chip plot stays in the upper portion and the
-    # x-axis label/tick labels never collide with the panel.
-    # Fixed size keeps font pixel-height consistent across all designs.
+    # panel. We use subplots_adjust with explicit margins (rather than
+    # tight_layout) so plot_w_in / plot_h_in below match what the axes
+    # actually occupy — tight_layout would shrink the axes to make room
+    # for tick labels and the title, which left the per-pad label width
+    # cap ~20% too generous and let long pad names overflow the figure.
     canvas = 14.0
     total_w = die_w + 2 * margin
     total_h = die_h + 2 * margin
     if total_w >= total_h:
         fig_w = canvas
-        fig_h = canvas * total_h / total_w
+        fig_h_chip = canvas * total_h / total_w
     else:
-        fig_h = canvas
+        fig_h_chip = canvas
         fig_w = canvas * total_w / total_h
     panel_strip_in = 1.3
-    fig_h += panel_strip_in
-    # Aliases kept for the font-sizing code below; reflect the chip
-    # plot region (excluding the panel strip) so labels still size to
-    # the area available next to pads.
-    plot_w_in = fig_w
-    plot_h_in = fig_h - panel_strip_in
+    title_strip_in = 1.0  # space at top for title (two-line + padding)
+    side_margin_in = 1.05  # space for y-axis label + tick labels
+    right_margin_in = 0.45
+    xlabel_strip_in = 0.7  # x-axis label + tick labels
+    fig_h = fig_h_chip + panel_strip_in + title_strip_in + xlabel_strip_in
+
+    # Axes box position in figure-fraction coords. Locked explicitly so
+    # the per-label sizing math below knows the actual chip plot size.
+    ax_left_frac = side_margin_in / fig_w
+    ax_right_frac = 1 - right_margin_in / fig_w
+    ax_top_frac = 1 - title_strip_in / fig_h
+    ax_bottom_frac = (panel_strip_in + xlabel_strip_in) / fig_h
+    plot_w_in = fig_w - side_margin_in - right_margin_in
+    plot_h_in = fig_h_chip
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    fig.subplots_adjust(
+        left=ax_left_frac, right=ax_right_frac,
+        top=ax_top_frac, bottom=ax_bottom_frac,
+    )
 
     # GDS render as background, or plain fill if none supplied.
     if background_image is not None and background_image.exists():
@@ -729,13 +742,11 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     ax.grid(True, which="both", linewidth=0.8, alpha=0.7,
             color="#888", linestyle="--")
 
-    # tight_layout before placing the overlay axes so it doesn't try to
-    # reposition them afterwards. The `rect` argument restricts the
-    # layout to ignore the bottom panel_strip_in inches — that area is
-    # reserved for the info panel and tight_layout would otherwise pull
-    # the chip plot into it.
+    # Axes box position is already locked via subplots_adjust above —
+    # no tight_layout call so the per-pad label sizing math (which
+    # used plot_w_in / plot_h_in for the pt-per-µm ratio) stays in
+    # sync with what matplotlib actually renders.
     panel_strip_frac = panel_strip_in / fig_h
-    fig.tight_layout(rect=(0, panel_strip_frac, 1, 1))
 
     # Info panel in the bottom-right: project code (big), slot size
     # (small), QR image. The QR encodes "G801<PROJ>" — the shuttle ID
