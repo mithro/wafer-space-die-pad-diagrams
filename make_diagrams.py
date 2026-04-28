@@ -22,7 +22,6 @@ import matplotlib.image as mpimg
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import segno
-from matplotlib.patches import ConnectionPatch
 
 REPO = Path(__file__).resolve().parent.parent / "ws-run1"
 OAS = REPO / "layout" / "reticle.oas"
@@ -415,27 +414,16 @@ def _add_corner_zoom(fig: plt.Figure, ax: plt.Axes,
     on the other two. Pad labels in the L/R strips never reach above y1
     or below y0, and T/B labels never reach left of x0 or right of x1,
     so those corner regions are guaranteed free.
-
-    A red rectangle on the main axes marks the crop, and a
-    ConnectionPatch draws a leader line between them.
     """
     x0, y0, x1, y1 = die_bb
     if corner == "tl":
         zb = (x0, y1 - crop_um, x0 + crop_um, y1)
-        connect_from = (x0 + crop_um, y1 - crop_um)  # bottom-right of zoom
-        connect_to_axfrac = (1.0, 0.0)                # bottom-right of inset
     elif corner == "tr":
         zb = (x1 - crop_um, y1 - crop_um, x1, y1)
-        connect_from = (x1 - crop_um, y1 - crop_um)  # bottom-left of zoom
-        connect_to_axfrac = (0.0, 0.0)                # bottom-left of inset
     elif corner == "bl":
         zb = (x0, y0, x0 + crop_um, y0 + crop_um)
-        connect_from = (x0 + crop_um, y0 + crop_um)  # top-right of zoom
-        connect_to_axfrac = (1.0, 1.0)                # top-right of inset
     else:  # br
         zb = (x1 - crop_um, y0, x1, y0 + crop_um)
-        connect_from = (x1 - crop_um, y0 + crop_um)  # top-left of zoom
-        connect_to_axfrac = (0.0, 1.0)                # top-left of inset
 
     axins = ax.inset_axes(axes_bbox, zorder=6)
     img = mpimg.imread(str(background_image))
@@ -445,22 +433,16 @@ def _add_corner_zoom(fig: plt.Figure, ax: plt.Axes,
     axins.set_ylim(zb[1], zb[3])
     axins.set_xticks([])
     axins.set_yticks([])
+    # Subtle inset border: the inset's position alone tells the reader
+    # which corner of the chip it shows (TL inset = top-left corner of
+    # the chip), so an additional red rectangle on the chip plus a
+    # leader line just clutters the corner artwork — and on rotated
+    # chips the rectangle collides with the QR/logo highlight frames.
+    # The grey border keeps the inset visually distinct without
+    # competing with anything else.
     for spine in axins.spines.values():
-        spine.set_edgecolor("red")
-        spine.set_linewidth(2.2)
-
-    # Red rectangle on the main axes showing the crop region.
-    ax.add_patch(mpatches.Rectangle(
-        (zb[0], zb[1]), zb[2] - zb[0], zb[3] - zb[1],
-        linewidth=1.6, edgecolor="red", facecolor="none", zorder=5,
-    ))
-
-    # Leader line from the zoom box corner to the matching inset corner.
-    fig.add_artist(ConnectionPatch(
-        xyA=connect_from, coordsA=ax.transData,
-        xyB=connect_to_axfrac, coordsB=axins.transAxes,
-        color="red", linewidth=1.2, alpha=0.75, zorder=5,
-    ))
+        spine.set_edgecolor("#444")
+        spine.set_linewidth(1.4)
 
 
 def _draw_qr_on_ax(ax: plt.Axes, data: str,
