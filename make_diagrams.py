@@ -723,9 +723,10 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     ax.set_xlabel("x (um)")
     ax.set_ylabel("y (um)")
     ax.set_title(
-        f"{cell_name} — {die_w:.0f} x {die_h:.0f} um — "
+        f"{cell_name}\n"
+        f"{die_w:.0f} × {die_h:.0f} µm  ·  "
         f"{labelled} labelled pads, {unlabelled} unlabelled",
-        fontsize=11,
+        fontsize=22, fontweight="bold", pad=14,
     )
     ax.grid(True, which="both", linewidth=0.3, alpha=0.4)
 
