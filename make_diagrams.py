@@ -790,9 +790,18 @@ def setup_layout_view(layout: kdb.Layout) -> klay.LayoutView:
     lv.set_config("background-color", "#ffffff")
     lv.set_config("text-visible", "false")
     lv.set_config("draw-cell-frame", "false")
-    # Mask down to the two-tone layer set.
+    # Mask down to the two-tone layer set, and force solid fills on
+    # those layers. The .lyp ships every metal with dither pattern I9
+    # (inverted horizontal stripes) and pad with I5, which produces
+    # the busy striped look that doesn't match shipping/die_renders.
+    # Pattern 0 renders solid colour, so polygon edges (and the dummy-
+    # fill grid hidden inside large metal regions) read cleanly without
+    # the dither distracting from the chip's own structure.
     for it in lv.each_layer():
-        it.visible = (it.source_layer, it.source_datatype) in BG_VISIBLE_LAYERS
+        keep = (it.source_layer, it.source_datatype) in BG_VISIBLE_LAYERS
+        it.visible = keep
+        if keep:
+            it.dither_pattern = 0
     lv.update_content()
     return lv
 
