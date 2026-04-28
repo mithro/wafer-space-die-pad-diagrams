@@ -496,12 +496,15 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     die_w = x1 - x0
     die_h = y1 - y0
 
-    # Outside margin where labels sit, and the tiny gap between each pad's
-    # rectangle and its adjacent text. label_gap is small on purpose — pads
-    # already sit a few um inside the die edge, so this keeps the final
-    # pad-to-text gap tight while still avoiding the die outline.
+    # Outside margin where labels sit, plus the gap between each pad's
+    # rectangle and its adjacent text. label_gap is bumped to ~1.5% of
+    # the die size so the rotated top/bottom labels don't sit visually
+    # on the chip outline, and the L/R labels keep clear of the pad
+    # rectangles. The fontsize cap further reserves the top ~25% of the
+    # margin so the rotated labels never reach the axes top/bottom
+    # spine.
     margin = max(die_w, die_h) * 0.20
-    label_gap = max(die_w, die_h) * 0.003
+    label_gap = max(die_w, die_h) * 0.015
 
     # Figure: fit the die into a 14" bounding box preserving aspect ratio,
     # then add a dedicated bottom strip (panel_strip_in) for the info
@@ -666,22 +669,27 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
         "T": _min_gap(edge_xs["T"]) * pt_per_um_x * safety,
         "B": _min_gap(edge_xs["B"]) * pt_per_um_x * safety,
     }
-    # Outward margin in pt is axis-dependent: L/R labels extend in x,
-    # T/B labels extend in y (because they're rotated 90°).
-    edge_margin_pt: dict[str, float] = {
-        "L": margin_pt_x,
-        "R": margin_pt_x,
-        "T": margin_pt_y,
-        "B": margin_pt_y,
+    # Outward margin (in µm) and the pt-per-µm factor for the axis the
+    # rotated label extends along: L/R labels extend in x, T/B labels
+    # extend in y because they're rotated 90°.
+    edge_margin_um: dict[str, float] = {"L": margin, "R": margin,
+                                         "T": margin, "B": margin}
+    pt_per_um: dict[str, float] = {
+        "L": pt_per_um_x, "R": pt_per_um_x,
+        "T": pt_per_um_y, "B": pt_per_um_y,
     }
 
     def _pad_fontsize(pad: Pad) -> float:
         edge = _classify_edge(pad, x0, y0, x1, y1)
         name = pad.net or "?"
         height_cap = edge_height_cap[edge]
-        # Width fit: 0.6 × fs × N chars must fit in the outward margin, with
-        # a 10% slack so the label never quite touches the figure edge.
-        width_cap = edge_margin_pt[edge] / (len(name) * 0.6) * 0.9
+        # Width fit: 0.6 × fs × N chars must fit in the outward margin
+        # MINUS the label_gap above the chip outline AND MINUS another
+        # ~10% reserved for clearance from the axes spine. Cap labels at
+        # ~70% of the available margin so a visible buffer remains
+        # between the rotated label tops and the plot border.
+        usable_pt = (edge_margin_um[edge] - label_gap) * pt_per_um[edge]
+        width_cap = usable_pt / (len(name) * 0.6) * 0.85
         return max(4.0, min(height_cap, width_cap, 36.0))
 
     # Place each label directly in line with its pad (no leader lines).
