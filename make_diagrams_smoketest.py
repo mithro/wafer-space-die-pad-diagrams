@@ -13,8 +13,10 @@ from make_diagrams import (OAS, OUT_DIR, _is_peripheral, _rotate_image_180,
 SMOKE_TARGETS = [
     "WSLG_chip_top_10_2",          # matches the README reference image
     "TRID_TOP_14_2",               # has very long pad names
-    "TQVA_chip_top_14_8",           # smallest 0.5x0.5 chip
-    "ISHI_ISHI-KAI_WS_RUN1_12_4",   # busy interior
+    "TQVA_chip_top_14_8",          # smallest 0.5x0.5 chip
+    "ISHI_ISHI-KAI_WS_RUN1_12_4",  # busy interior
+    "KIAN_chip_top_8_0",           # full 1x1 RISC-V SoC
+    "MOS2_chip_top_10_6",          # interior probe pads
 ]
 
 
