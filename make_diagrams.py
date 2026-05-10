@@ -522,7 +522,15 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     else:
         fig_h_chip = canvas
         fig_w = canvas * total_w / total_h
-    panel_strip_in = 1.3
+    # Panel-strip height scales with fig_w so wide figures get a
+    # proportionally taller bottom strip — the QR is square (qr_in =
+    # panel_h_in) and the project-code fontsize derives from
+    # panel_h_in, so taller strip => bigger QR + bigger code text =>
+    # the panel dominates the available space rather than huddling at
+    # the right. The 0.24·fig_w factor was tuned so that a 14"-wide
+    # figure gets ~3.4" of strip (≈ 3" panel) and a 9"-wide figure
+    # falls back on the 2.4" floor.
+    panel_strip_in = max(2.4, fig_w * 0.24)
     title_strip_in = 1.0  # space at top for title (two-line + padding)
     side_margin_in = 1.05  # space for y-axis label + tick labels
     right_margin_in = 0.45
@@ -763,29 +771,59 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     # that the wafer.space precheck stamps into reticle.oas. The
     # project→mask dict at the top of the file was derived from
     # probe_segno_match_v2.py's brute-force comparison.
+    #
+    # Sizing: the panel fills the dedicated bottom strip (panel_strip_in)
+    # almost edge-to-edge so the QR and project code dominate the space
+    # under the chip plot rather than huddling in a small block. Text
+    # row positions are derived from each fontsize-in-inches so the two
+    # rows can never overlap — the previous implementation used magic
+    # axes-fraction y values and the 42pt code text actually overlapped
+    # the slot caption.
     code = _project_code(cell_name)
     size = computed_slot_size(die_w, die_h)
 
-    panel_h_in = 1.0
+    # Reserve a small gutter inside the strip so the panel breathes; the
+    # rest is panel content.
+    panel_h_in = panel_strip_in - 0.30
     qr_in = panel_h_in
-    text_w_in = 2.4
-    gutter_x_in = 0.30
-    gap_in = 0.18
-    panel_w_in = text_w_in + gap_in + qr_in + 2 * gutter_x_in
 
-    # Centre the panel inside the bottom strip vertically, and pin it to
-    # the right edge of the figure with a small horizontal gutter.
+    # Project code ≈ 62% of panel height (cap-height fits with a top inset
+    # and room below for the slot caption). Slot caption is ~24% the size
+    # of the project code, monospace.
+    code_fs_pt = panel_h_in * 72 * 0.62
+    slot_fs_pt = code_fs_pt * 0.24
+
+    # Bracket the bottom strip: project code anchored at the axes' left
+    # edge (so it lines up with the chip plot above it); QR anchored at
+    # the figure's right edge with a small gutter. On wide figures this
+    # naturally fills the horizontal space between them; on narrow ones
+    # they end up close together but never overlap because text_w_in is
+    # the actual rendered width of the 4-char code at code_fs_pt.
+    text_x = ax_left_frac
+    text_w_in = len(code) * 0.62 * code_fs_pt / 72 + 0.20
+    qr_right_inset_in = 0.35
+    qr_x = 1.0 - (qr_right_inset_in + qr_in) / fig_w
+
+    # Centre the panel inside the bottom strip vertically.
     panel_y = (panel_strip_in - panel_h_in) / 2 / fig_h
-    text_x = 1.0 - (panel_w_in - gutter_x_in) / fig_w
     ax_text = fig.add_axes((text_x, panel_y,
                             text_w_in / fig_w, panel_h_in / fig_h))
     ax_text.axis("off")
-    ax_text.text(0, 0.78, code, fontsize=42, fontweight="bold",
-                 family="monospace", color="#111", ha="left", va="top")
-    ax_text.text(0, 0.10, f"slot {size}", fontsize=18, family="monospace",
-                 color="#555", ha="left", va="bottom")
 
-    qr_x = text_x + (text_w_in + gap_in) / fig_w
+    # Stack the two text rows: project code anchored top, slot caption
+    # anchored top below it with a measured 0.12" gap. Both `va="top"`
+    # so the y-anchor names the top of the text bbox; bottom = top -
+    # fontsize_in_inches / panel_h_in. This makes overlap impossible.
+    code_top_frac = 0.96
+    code_h_frac = (code_fs_pt / 72) / panel_h_in
+    inter_row_gap_frac = 0.12 / panel_h_in
+    slot_top_frac = code_top_frac - code_h_frac - inter_row_gap_frac
+    ax_text.text(0, code_top_frac, code, fontsize=code_fs_pt,
+                 fontweight="bold", family="monospace", color="#111",
+                 ha="left", va="top")
+    ax_text.text(0, slot_top_frac, f"slot {size}", fontsize=slot_fs_pt,
+                 family="monospace", color="#555", ha="left", va="top")
+
     ax_qr = fig.add_axes((qr_x, panel_y, qr_in / fig_w, qr_in / fig_h))
     qr_data = f"{WSIP_QR_DATA_PREFIX}{code}"
     qr_mask = WSIP_QR_PROJECT_MASKS.get(code)  # None → segno auto-picks
