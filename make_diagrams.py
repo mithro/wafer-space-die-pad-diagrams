@@ -646,6 +646,13 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     # After 180° rotation the QR sits in the top-right and the logo in
     # the bottom-left, so each annotation's outer-margin label and
     # leader line are anchored to the corner the cell now occupies.
+    #
+    # That outer-margin corner is the same rectangle the corner zoom
+    # inset (_add_corner_zoom, zorder=6) is sized to fill, so the
+    # label/leader land *under* the inset and only the few characters
+    # poking past its edge stay visible. The inset shows a zoom of this
+    # very cell, so labelling it on top is coherent: the highlight box,
+    # leader and text are drawn at zorder >6 to sit above the inset.
     for bb, col, label, anchor in (
         (qr_bb, WSIP_QR_COLOR, "ID QR", "tr"),
         (logo_bb, WSIP_LOGO_COLOR, "wafer.space logo", "bl"),
@@ -658,7 +665,7 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
         ax.add_patch(mpatches.Rectangle(
             (bx0, by0), bx1 - bx0, by1 - by0,
             linewidth=3.0, edgecolor=col, facecolor=col, alpha=0.22,
-            zorder=2.5,
+            zorder=7,
         ))
         if anchor == "bl":
             # Logo sits in bottom-left; label in outer bottom-left.
@@ -672,11 +679,11 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
             leader_from = (bx1, by1)
         ax.plot(
             [leader_from[0], tx], [leader_from[1], ty],
-            color=col, linewidth=1.0, alpha=0.8, zorder=3.4,
+            color=col, linewidth=1.0, alpha=0.8, zorder=7.1,
         )
         ax.text(tx, ty, label,
                 color=col, fontsize=10, ha=ha_l, va=va_l,
-                family="monospace", fontweight="bold", zorder=3.5)
+                family="monospace", fontweight="bold", zorder=7.2)
 
     # pt-per-µm conversion factors used by both the inside-pad number and
     # the outer label. Computed up front so the rectangle-drawing loop
