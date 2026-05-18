@@ -157,6 +157,24 @@ PAD_COLORS: dict[str, tuple[str, str]] = {
 }
 
 
+def _contrast_text_color(fill_hex: str) -> str:
+    """Return '#fff' or '#111' for max readability on top of fill_hex.
+
+    Uses the perceived-luminance formula (0.299·R + 0.587·G + 0.114·B)
+    rather than a flat brightness average, because human eyes weight
+    green much more heavily than blue. With fill threshold 0.55, the
+    crimson DVDD (#d32f2f → 0.31) and orange AVDD (#f57c00 → 0.55)
+    rails get white text while the amber signal pads (#f5c16c → 0.74)
+    get black — both directions land on >7:1 contrast.
+    """
+    h = fill_hex.lstrip("#")
+    r = int(h[0:2], 16) / 255
+    g = int(h[2:4], 16) / 255
+    b = int(h[4:6], 16) / 255
+    luma = 0.299 * r + 0.587 * g + 0.114 * b
+    return "#ffffff" if luma < 0.55 else "#111111"
+
+
 def classify_net(name: str | None) -> str:
     """Return a key into PAD_COLORS for the given net name."""
     if not name:
@@ -188,6 +206,11 @@ class Pad:
     x1: float
     y1: float
     net: str | None = None
+    # Sequential pad number assigned by _number_pads_ccw. Pad 0 is the
+    # first pad encountered going counter-clockwise from the QR cell
+    # (which lives in the top-right corner after the 180° rotation), so
+    # the numbering walks TOP edge right→left, then LEFT, BOTTOM, RIGHT.
+    num: int | None = None
 
     @property
     def cx(self) -> float:
@@ -287,6 +310,47 @@ def _classify_edge(pad: Pad, x0: float, y0: float, x1: float, y1: float) -> str:
     if m == d_bottom:
         return "B"
     return "T"
+
+
+def _number_pads_ccw(pads: list[Pad],
+                     die_bb: tuple[float, float, float, float]) -> None:
+    """Assign sequential pad numbers walking counter-clockwise from the QR.
+
+    The QR cell sits in the top-right corner (after the 180° rotation
+    applied in main()), so the natural starting point is the rightmost
+    TOP-edge pad whose centre is still to the left of the QR. From there,
+    counter-clockwise traversal visits:
+
+        TOP   edge — right → left   (sorted by cx descending)
+        LEFT  edge — top   → bottom (sorted by cy descending)
+        BOTTOM edge — left → right  (sorted by cx ascending)
+        RIGHT edge — bottom → top   (sorted by cy ascending)
+
+    If the layout has any TOP-edge pads to the right of the QR (rare but
+    possible if a pad is squeezed between the QR and the right corner),
+    they're appended at the very end so the loop closes back at the QR.
+    Pads are mutated in place — pad.num is set on each.
+    """
+    x0, y0, x1, y1 = die_bb
+    # X coordinate of the QR's left edge in the rotated coordinate space.
+    # Pads with cx < qr_left sit "to the left of the QR" on the top edge.
+    qr_left_x = x1 - WSIP_QR_INSET_UM[0] - WSIP_CELL_UM
+
+    edges: dict[str, list[Pad]] = {"T": [], "L": [], "B": [], "R": []}
+    for p in pads:
+        edges[_classify_edge(p, x0, y0, x1, y1)].append(p)
+
+    top_left = sorted([p for p in edges["T"] if p.cx < qr_left_x],
+                      key=lambda p: -p.cx)
+    top_right = sorted([p for p in edges["T"] if p.cx >= qr_left_x],
+                       key=lambda p: -p.cx)
+    left = sorted(edges["L"], key=lambda p: -p.cy)
+    bottom = sorted(edges["B"], key=lambda p: p.cx)
+    right = sorted(edges["R"], key=lambda p: p.cy)
+
+    ordered = top_left + left + bottom + right + top_right
+    for n, p in enumerate(ordered):
+        p.num = n
 
 
 def _is_peripheral(pad: Pad, x0: float, y0: float, x1: float, y1: float) -> bool:
@@ -614,7 +678,21 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
                 color=col, fontsize=10, ha=ha_l, va=va_l,
                 family="monospace", fontweight="bold", zorder=3.5)
 
+    # pt-per-µm conversion factors used by both the inside-pad number and
+    # the outer label. Computed up front so the rectangle-drawing loop
+    # can size the in-pad number text without needing a second pass.
+    pt_per_um_x = 72.0 * plot_w_in / total_w
+    pt_per_um_y = 72.0 * plot_h_in / total_h
+
+    # Width of the widest pad number, used to right-align the digits in the
+    # outer label so the column of pad names stays vertically aligned.
+    num_width = max((len(str(p.num)) for p in pads if p.num is not None),
+                    default=1)
+
     # Draw pads, colored by net class (signal / ground / power variants).
+    # The pad number (assigned by _number_pads_ccw) is drawn centred inside
+    # the rectangle in a contrasting color so each pad's index is readable
+    # without cross-referencing the outer label.
     labelled = unlabelled = 0
     for pad in pads:
         has_net = pad.net is not None
@@ -627,6 +705,21 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
             facecolor=fill,
             zorder=2,
         ))
+        if pad.num is not None:
+            n_digits = len(str(pad.num))
+            # Cap inside-pad font size by both pad dimensions, leaving
+            # ~30% padding so the digits don't crowd the rectangle edge.
+            width_pt = pad.w * pt_per_um_x / (n_digits * 0.6) * 0.7
+            height_pt = pad.h * pt_per_um_y * 0.55
+            num_fs = max(3.5, min(width_pt, height_pt, 14.0))
+            ax.text(
+                pad.cx, pad.cy, str(pad.num),
+                ha="center", va="center",
+                fontsize=num_fs,
+                color=_contrast_text_color(fill),
+                family="monospace", fontweight="bold",
+                zorder=2.5,
+            )
         if has_net:
             labelled += 1
         else:
@@ -650,8 +743,8 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
     # Font sizing uses the inner plot dimensions (plot_w_in / plot_h_in),
     # not the full figure. The figure is padded with inset_strip_in on
     # every side which belongs to the zoom-inset strip, not the axes.
-    pt_per_um_x = 72.0 * plot_w_in / total_w
-    pt_per_um_y = 72.0 * plot_h_in / total_h
+    # (pt_per_um_x / pt_per_um_y were defined above for the inside-pad
+    # number sizing — reused here so both stay in sync.)
     margin_pt_x = margin * pt_per_um_x
     margin_pt_y = margin * pt_per_um_y
     safety = 0.85
@@ -687,17 +780,20 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
         "T": pt_per_um_y, "B": pt_per_um_y,
     }
 
-    def _pad_fontsize(pad: Pad) -> float:
+    def _pad_fontsize(pad: Pad, label_text: str) -> float:
         edge = _classify_edge(pad, x0, y0, x1, y1)
-        name = pad.net or "?"
         height_cap = edge_height_cap[edge]
         # Width fit: 0.6 × fs × N chars must fit in the outward margin
         # MINUS the label_gap above the chip outline AND MINUS another
         # ~10% reserved for clearance from the axes spine. Cap labels at
         # ~70% of the available margin so a visible buffer remains
         # between the rotated label tops and the plot border.
+        # `label_text` is the actual rendered string (with the right-
+        # aligned pad-number prefix), so the width cap accounts for the
+        # extra digits without forcing _pad_fontsize to recompute the
+        # prefix itself.
         usable_pt = (edge_margin_um[edge] - label_gap) * pt_per_um[edge]
-        width_cap = usable_pt / (len(name) * 0.6) * 0.85
+        width_cap = usable_pt / (len(label_text) * 0.6) * 0.85
         return max(4.0, min(height_cap, width_cap, 36.0))
 
     # Place each label directly in line with its pad (no leader lines).
@@ -721,7 +817,14 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
             tx, ty = pad.cx, y0 - label_gap
             ha, va, rot = "right", "center", 90
 
-        txt = pad.net if pad.net else "?"
+        name = pad.net if pad.net else "?"
+        # Right-align the pad number to num_width digits so the column
+        # of labels lines up neatly even when pads 0..9 sit next to
+        # 10..99 — visually a nicer match for monospace font output.
+        if pad.num is not None:
+            txt = f"{pad.num:>{num_width}} {name}"
+        else:
+            txt = name
         if pad.net:
             color = PAD_COLORS[classify_net(pad.net)][1]
             weight = "bold" if classify_net(pad.net) != "signal" else "normal"
@@ -730,7 +833,7 @@ def render(cell_name: str, pads: list[Pad], die_bb: tuple[float, float, float, f
             weight = "normal"
         ax.text(
             tx, ty, txt,
-            ha=ha, va=va, fontsize=_pad_fontsize(pad), color=color,
+            ha=ha, va=va, fontsize=_pad_fontsize(pad, txt), color=color,
             family="monospace", zorder=3, rotation=rot,
             rotation_mode="anchor", fontweight=weight,
         )
@@ -966,6 +1069,12 @@ def main() -> None:
         # GDS-native bottom-left. die_bb is invariant under 180°
         # rotation around its own centre, so it stays the same.
         pads = [_rotate_pad_180(p, die_bb) for p in pads]
+
+        # Assign pad numbers walking CCW from the first pad left of the
+        # QR cell. Done after the rotation so the ordering is anchored
+        # to the QR's *displayed* position (top-right), not its native
+        # GDS position (bottom-left).
+        _number_pads_ccw(pads, die_bb)
 
         # Cross-check the README slot size against the actual GDS. A
         # mismatch either means the README is stale or the chip was

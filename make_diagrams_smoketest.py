@@ -5,10 +5,10 @@ from pathlib import Path
 
 import klayout.db as kdb
 
-from make_diagrams import (OAS, OUT_DIR, _is_peripheral, _rotate_image_180,
-                           _rotate_pad_180, assign_net_names, extract_labels,
-                           extract_pads, render, render_gds_background,
-                           setup_layout_view)
+from make_diagrams import (OAS, OUT_DIR, _is_peripheral, _number_pads_ccw,
+                           _rotate_image_180, _rotate_pad_180, assign_net_names,
+                           extract_labels, extract_pads, render,
+                           render_gds_background, setup_layout_view)
 
 SMOKE_TARGETS = [
     "WSLG_chip_top_10_2",          # matches the README reference image
@@ -44,6 +44,7 @@ def main() -> None:
                bb.right * layout.dbu, bb.top * layout.dbu)
         pads = [p for p in pads if _is_peripheral(p, *die)]
         pads = [_rotate_pad_180(p, die) for p in pads]
+        _number_pads_ccw(pads, die)
         bg_png = bg_cache / f"{name}.png"
         render_gds_background(lv, name, layout, die, bg_png)
         _rotate_image_180(bg_png)
