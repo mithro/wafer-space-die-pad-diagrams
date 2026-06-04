@@ -1047,7 +1047,7 @@ def main() -> None:
             instances.append(name)
     print(f"\n{len(instances)} unique designs to render")
 
-    summary: list[tuple[str, int, int]] = []
+    summary: list[tuple[str, str, int, int]] = []
     for i, name in enumerate(sorted(instances), start=1):
         t_start = time.time()
         cell = layout.cell(name)
@@ -1096,9 +1096,15 @@ def main() -> None:
                   f"({die_bb[2] - die_bb[0]:.0f} x "
                   f"{die_bb[3] - die_bb[1]:.0f} um)")
 
-        out_png = OUT_DIR / f"{name}.png"
-        out_svg = OUT_DIR / f"{name}.svg"
-        out_pdf = OUT_DIR / f"{name}.pdf"
+        # Suffix the slot size into the output filenames so the size is
+        # readable at a glance from a directory listing. bg_png stays
+        # keyed by name — slot size is a deterministic function of the
+        # cell, so a suffix would add no information *and* invalidate
+        # every cached render.
+        stem = f"{name}_{computed}"
+        out_png = OUT_DIR / f"{stem}.png"
+        out_svg = OUT_DIR / f"{stem}.svg"
+        out_pdf = OUT_DIR / f"{stem}.pdf"
         bg_png = bg_cache / f"{name}.png"
         render_gds_background(lv, name, layout, die_bb, bg_png)
         # KLayout writes the chip in its native orientation; rotate the
@@ -1108,7 +1114,7 @@ def main() -> None:
                background_image=bg_png)
 
         labelled = sum(1 for p in pads if p.net)
-        summary.append((name, len(pads), labelled))
+        summary.append((name, computed, len(pads), labelled))
         print(f"  [{i:>2}/{len(instances)}] {name}: {len(pads):>3} pads, "
               f"{labelled:>3} labelled  slot {computed}  "
               f"({time.time() - t_start:.1f}s)")
@@ -1119,8 +1125,9 @@ def main() -> None:
         fh.write("# Reticle pad-diagram index\n\n")
         fh.write("| Design cell | Pads | Labelled | Diagram |\n")
         fh.write("|---|---|---|---|\n")
-        for name, n, nl in summary:
-            fh.write(f"| {name} | {n} | {nl} | [{name}.png]({name}.png) |\n")
+        for name, size, n, nl in summary:
+            fname = f"{name}_{size}.png"
+            fh.write(f"| {name} | {n} | {nl} | [{fname}]({fname}) |\n")
     print(f"\nWrote {index}")
 
 

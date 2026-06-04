@@ -7,8 +7,8 @@ import klayout.db as kdb
 
 from make_diagrams import (OAS, OUT_DIR, _is_peripheral, _number_pads_ccw,
                            _rotate_image_180, _rotate_pad_180, assign_net_names,
-                           extract_labels, extract_pads, render,
-                           render_gds_background, setup_layout_view)
+                           computed_slot_size, extract_labels, extract_pads,
+                           render, render_gds_background, setup_layout_view)
 
 SMOKE_TARGETS = [
     "WSLG_chip_top_10_2",          # matches the README reference image
@@ -48,9 +48,10 @@ def main() -> None:
         bg_png = bg_cache / f"{name}.png"
         render_gds_background(lv, name, layout, die, bg_png)
         _rotate_image_180(bg_png)
-        out_png = OUT_DIR / f"{name}.png"
-        out_svg = OUT_DIR / f"{name}.svg"
-        out_pdf = OUT_DIR / f"{name}.pdf"
+        stem = f"{name}_{computed_slot_size(die[2] - die[0], die[3] - die[1])}"
+        out_png = OUT_DIR / f"{stem}.png"
+        out_svg = OUT_DIR / f"{stem}.svg"
+        out_pdf = OUT_DIR / f"{stem}.pdf"
         render(name, pads, die, out_png, out_svg, out_pdf,
                background_image=bg_png)
         labelled = sum(1 for p in pads if p.net)
