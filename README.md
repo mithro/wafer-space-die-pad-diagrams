@@ -18,7 +18,7 @@ generator emits a PNG, SVG, and PDF showing:
   project-specific QR code that reproduces the per-chip QR stamped
   on each design by the wafer.space precheck pipeline.
 
-![Sample WSLG pad diagram](diagrams/WSLG_chip_top_10_2.png)
+![Sample WSLG pad diagram](diagrams/WSLG_chip_top_10_2_1x1.png)
 
 ## Repository layout
 
